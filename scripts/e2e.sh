@@ -32,6 +32,11 @@ FRONTEND=http://localhost:3000
 GATEWAY=http://localhost:4001
 SUBJECT_MODEL=gemma4
 JUDGE_MODEL=qwen35
+# Sample cap for the acceptance run. Deliberately tiny: the point is to prove the machinery
+# end to end, and local judge models are slow (reasoning models emit long traces). A real
+# governance run uses the registry defaults instead.
+E2E_RUN_LIMIT=${E2E_RUN_LIMIT:-2}
+E2E_RUN_TIMEOUT=${E2E_RUN_TIMEOUT:-5400}
 
 PASS=0
 FAIL=0
@@ -230,6 +235,122 @@ if echo "$INSPECT_EVAL" | grep -q JUDGE_OK; then
     pass "Inspect AI model-graded judge through gateway to $JUDGE_MODEL — $(echo "$INSPECT_EVAL" | grep JUDGE_OK | cut -c10-)"
 else
     fail "Inspect AI judge routing" "${INSPECT_EVAL}${INSPECT_OUT}"
+fi
+
+# --------------------------------------------------------------------------------------
+section "1.1 / 1.3  Registry: judge overrides declared, metric keys pinned to live output"
+# --------------------------------------------------------------------------------------
+CHECKS_OUT=$(curl -sf --max-time 15 "$BACKEND/api/checks?asset_type=llm" 2>&1)
+if echo "$CHECKS_OUT" | python3 -c "
+import json,sys
+checks={c['id']: c for c in json.load(sys.stdin)}
+expected={'cyse4_multilingual_prompt_injection','cyse4_mitre','cyse4_mitre_frr',
+          'cyse4_instruct','agentdojo'}
+assert set(checks)==expected, f'registry drift: {set(checks) ^ expected}'
+# Both judged checks must advertise that they need one, or an upstream default takes over.
+assert checks['cyse4_mitre']['needs_judge']
+assert checks['cyse4_multilingual_prompt_injection']['needs_judge']
+# Directions must not have collapsed to one value (a classic copy-paste error).
+assert len({c['direction'] for c in checks.values()})==2
+" 2>/dev/null; then
+    pass "5 benchmarks registered with judge requirements and mixed directions"
+else
+    fail "check registry" "$CHECKS_OUT"
+fi
+
+POLICY_OUT=$(curl -sf --max-time 15 "$BACKEND/api/policy" 2>&1)
+if echo "$POLICY_OUT" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+assert d['content_hash'], 'policy must be content-hashed'
+assert d['composite_is_display_only'] is True
+assert len(d['llm_gates'])==5, d['llm_gates']
+assert d['thresholds_are_calibrated'] is False, 'placeholders must be labelled as such'
+" 2>/dev/null; then
+    pass "policy exposes 5 gates, content hash, and honest calibration status"
+else
+    fail "policy endpoint" "$POLICY_OUT"
+fi
+
+# --------------------------------------------------------------------------------------
+section "1.2 / 1.4-1.9  A real governance run, all 5 benchmarks, local models"
+# --------------------------------------------------------------------------------------
+echo "  starting a real run (subject $SUBJECT_MODEL, judge $JUDGE_MODEL, limit $E2E_RUN_LIMIT)..."
+echo "  this runs five real benchmarks on local models and takes a while."
+RUN_CREATE=$(curl -sf --max-time 900 -X POST "$BACKEND/api/runs" \
+    -H 'Content-Type: application/json' \
+    -d "{\"asset_type\":\"llm\",\"name\":\"e2e $SUBJECT_MODEL\",\"identifier\":\"$SUBJECT_MODEL\",\"judge_model\":\"$JUDGE_MODEL\",\"limit\":$E2E_RUN_LIMIT}" 2>&1)
+RUN_ID=$(echo "$RUN_CREATE" | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])" 2>/dev/null)
+
+if [ -n "$RUN_ID" ]; then
+    pass "run $RUN_ID created (preflight passed for subject and judge)"
+
+    DEADLINE=$((SECONDS + E2E_RUN_TIMEOUT))
+    RUN_JSON=""
+    while [ $SECONDS -lt $DEADLINE ]; do
+        RUN_JSON=$(curl -sf --max-time 20 "$BACKEND/api/runs/$RUN_ID" 2>/dev/null)
+        STATE=$(echo "$RUN_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null)
+        [ "$STATE" = "complete" ] || [ "$STATE" = "failed" ] && break
+        sleep 15
+    done
+
+    if echo "$RUN_JSON" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+assert d['status'] in ('complete','failed'), f\"run did not finish: {d['status']}\"
+gates=d['gate_outcomes']
+assert len(gates)==5, f'expected 5 gate outcomes, got {len(gates)}'
+scored=[g for g in gates if g['raw_value'] is not None]
+assert len(scored)==5, f'benchmarks without a score: {[g[\"check_id\"] for g in gates if g[\"raw_value\"] is None]}'
+assert d['decision'] in ('auto_approve','needs_deep_testing','error'), d['decision']
+# Criterion 1.9: provenance fields must be populated on the run.
+assert d['judge_model'], 'judge model not recorded'
+assert d['policy_hash'], 'policy hash not recorded'
+# Criterion 1.4: ungated extras recorded but never turned into gates.
+extras=[s for s in d['scores'] if not s['gated']]
+assert extras, 'no ungated metrics captured - extras should be stored for inspection'
+assert all(s['threshold'] is None for s in extras), 'an ungated metric was given a threshold'
+# Criterion 1.5: composite present but flagged display-only.
+assert d['composite_is_display_only'] is True
+print('  decision:', d['decision'])
+print('  composite (display only):', d['composite_score'])
+for g in gates:
+    print(f\"    {'pass' if g['passed'] else 'FAIL'}  {g['check_id']}: {g['reason']}\")
+" 2>&1 | tee /tmp/e2e-run-detail.txt | grep -q "decision:"; then
+        pass "all 5 benchmarks scored, decision emitted, extras ungated"
+        sed -n '2,20p' /tmp/e2e-run-detail.txt
+    else
+        fail "real governance run" "$(cat /tmp/e2e-run-detail.txt 2>/dev/null)"
+    fi
+
+    # Criterion 1.9 continued: the run detail page must render the provenance.
+    RUN_HTML=$(curl -sf --max-time 20 "$FRONTEND/runs/$RUN_ID" 2>&1)
+    MISSING_RUN=""
+    for needle in "Benchmark gates" "Run provenance" "$JUDGE_MODEL" "display only"; do
+        echo "$RUN_HTML" | grep -q "$needle" || MISSING_RUN="$MISSING_RUN '$needle'"
+    done
+    if [ -z "$MISSING_RUN" ]; then
+        pass "run detail page renders gates, provenance, and the display-only caveat"
+    else
+        fail "run detail page" "missing:$MISSING_RUN"
+    fi
+
+    # Leaderboard must show the run with its gate tally.
+    LB_OUT=$(curl -sf --max-time 20 "$BACKEND/api/leaderboard/llm" 2>&1)
+    if echo "$LB_OUT" | python3 -c "
+import json,sys
+rows=json.load(sys.stdin)
+assert rows, 'leaderboard empty after a completed run'
+r=rows[0]
+assert r['gates_total']==5, r['gates_total']
+assert r['composite_is_display_only'] is True
+" 2>/dev/null; then
+        pass "leaderboard reports the run with a 5-gate denominator"
+    else
+        fail "leaderboard" "$LB_OUT"
+    fi
+else
+    fail "create run" "$RUN_CREATE"
 fi
 
 # --------------------------------------------------------------------------------------

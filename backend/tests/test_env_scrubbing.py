@@ -38,6 +38,7 @@ def _settings(tmp_path: Path) -> Settings:
         gateway_api_key="sk-local",
         gateway_provider="gateway",
         default_judge_model="qwen35",
+        scanner_model="gemma4",
         db_path=tmp_path / "db.sqlite",
         artifact_dir=tmp_path / "artifacts",
         workspace_dir=tmp_path / "workspaces",

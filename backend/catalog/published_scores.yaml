@@ -1,0 +1,27 @@
+# Published benchmark scores harvested from vendor system cards and papers.
+#
+# "Harvest before compute": if a score is already published, we reuse it rather than burning
+# our own tokens. Entries here are served with provenance `published` and always carry a
+# source URL so a reviewer can check the claim.
+#
+# SHIPPED EMPTY ON PURPOSE. Inventing plausible-looking numbers for a governance record would
+# be worse than having none — a fabricated score could auto-approve a model that was never
+# measured. Add entries only when you have read the number in the cited source yourself.
+#
+# Be aware of a real limitation when you do: cross-vendor comparability is poor. Meta reports
+# CyberSecEval, Anthropic reports Gray Swan Shade, others report internal CTFs, and few
+# report the specific CyberSecEval-4 tasks this app gates on. In practice most models will
+# need a self-run, which is affordable because the whole suite is pure-API.
+#
+# Schema, one list entry per (model, check):
+#
+# scores:
+#   - model: <gateway alias or canonical model name>
+#     check_id: <must match a check id in app/engines/registry.py>
+#     metric: <must match that check's metric_name>
+#     value: <float, as a 0-1 RATE — convert percentages before entering>
+#     source_url: <where you read it>
+#     captured: <YYYY-MM-DD>
+#     note: <optional caveat, e.g. differing harness or sample count>
+
+scores: []

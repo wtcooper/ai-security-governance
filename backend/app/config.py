@@ -29,6 +29,10 @@ class Settings:
     # The matching GATEWAY_BASE_URL / GATEWAY_API_KEY env vars are what Inspect reads.
     gateway_provider: str
     default_judge_model: str
+    # Model the Cisco scanners use for their LLM-as-judge analyzers. Separate from the eval
+    # judge because the two jobs differ: one grades benchmark answers, the other reasons about
+    # code. Local by default so a scan costs nothing.
+    scanner_model: str
 
     # --- Storage ------------------------------------------------------------
     db_path: Path
@@ -63,6 +67,7 @@ def get_settings() -> Settings:
         # Local by default: routine development and the end-to-end suite must not spend
         # money. Point this at gpt-5.6-luna for real calibration runs.
         default_judge_model=os.environ.get("DEFAULT_JUDGE_MODEL", "qwen35"),
+        scanner_model=os.environ.get("SCANNER_MODEL", "gemma4"),
         db_path=Path(os.environ.get("DB_PATH", data / "governance.db")),
         artifact_dir=Path(os.environ.get("ARTIFACT_DIR", data / "artifacts")),
         workspace_dir=Path(os.environ.get("WORKSPACE_DIR", data / "workspaces")),

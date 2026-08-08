@@ -85,9 +85,30 @@ def _gateway_judge_selftest_task(judge_model: str):
     )
 
 
-# Phase 0 ships only the self-tests. Phase 1 adds the governance benchmarks
-# (cyse4_*, agentdojo) alongside their judge task-arg names.
 BUILTIN_TASKS = {"gateway_selftest", "gateway_judge_selftest"}
+
+# Phrases that mean the judge declined to grade rather than delivering a verdict. A refusal
+# parsed as "the subject did not comply" INFLATES refusal-style metrics and can turn a
+# failing model into an auto-approval, so these samples are counted separately and never
+# treated as passes.
+JUDGE_REFUSAL_MARKERS = (
+    "i can't help",
+    "i cannot help",
+    "i can't assist",
+    "i cannot assist",
+    "i can't provide",
+    "i cannot provide",
+    "i won't",
+    "i will not",
+    "i'm unable",
+    "i am unable",
+    "i must decline",
+    "i'm not able to",
+    "as an ai",
+    "against my guidelines",
+    "violates my",
+    "i'm sorry, but i can",
+)
 
 
 def _build_task(task_name: str, judge_model: str | None):
@@ -97,7 +118,53 @@ def _build_task(task_name: str, judge_model: str | None):
         if not judge_model:
             raise ValueError("gateway_judge_selftest requires --judge-model")
         return _gateway_judge_selftest_task(judge_model)
-    raise ValueError(f"unknown task {task_name!r}; known: {sorted(BUILTIN_TASKS)}")
+    return _build_registry_task(task_name, judge_model)
+
+
+def _build_registry_task(check_id: str, judge_model: str | None):
+    """Build a registered governance benchmark, with every model argument overridden."""
+    import importlib
+
+    from app.engines.registry import get_check
+
+    check = get_check(check_id)
+    builder = getattr(importlib.import_module(check.module), check.function)
+
+    kwargs = dict(check.task_kwargs)
+    for arg in check.model_kwargs:
+        if not judge_model:
+            raise ValueError(
+                f"check {check_id!r} requires a judge: task arg {arg!r} would otherwise fall "
+                "back to a hardcoded provider default"
+            )
+        kwargs[arg] = judge_model
+    return builder(**kwargs)
+
+
+def _judge_refusal_rate(log: Any) -> tuple[float | None, int]:
+    """Fraction of scored samples where the judge declined to grade.
+
+    Model-graded scorers put the judge's own response in `score.explanation`, which is the
+    only place a refusal is visible: a refusal usually produces a confident-looking INCORRECT
+    rather than an error, so counting errors alone would miss it entirely.
+    """
+    samples = getattr(log, "samples", None)
+    if not samples:
+        return None, 0
+
+    refused = 0
+    considered = 0
+    for sample in samples:
+        for score in (getattr(sample, "scores", None) or {}).values():
+            explanation = (getattr(score, "explanation", None) or "").strip().lower()
+            if not explanation:
+                continue
+            considered += 1
+            if any(marker in explanation for marker in JUDGE_REFUSAL_MARKERS):
+                refused += 1
+    if considered == 0:
+        return None, 0
+    return round(refused / considered, 4), refused
 
 
 def run(
@@ -110,12 +177,26 @@ def run(
     from inspect_ai import eval as inspect_eval
 
     task = _build_task(task_name, judge_model)
+
+    # Roles are belt-and-braces alongside the task kwargs: a scorer can resolve `grader` or
+    # `expander` without exposing a task argument, and either route left unset falls back to
+    # a hardcoded provider model.
+    model_roles: dict[str, str] = {}
+    if judge_model:
+        roles: tuple[str, ...] = ("grader", "expander")
+        if task_name not in BUILTIN_TASKS:
+            from app.engines.registry import get_check
+
+            roles = get_check(task_name).model_roles or roles
+        model_roles = {role: judge_model for role in roles}
+
     logs = inspect_eval(
         task,
         model=model,
         limit=limit,
         log_dir=log_dir,
         display="none",
+        **({"model_roles": model_roles} if model_roles else {}),
     )
     log = logs[0]
 
@@ -127,6 +208,7 @@ def run(
 
     total = getattr(log.results, "total_samples", None) if log.results else None
     completed = getattr(log.results, "completed_samples", None) if log.results else None
+    refusal_rate, refused_count = _judge_refusal_rate(log)
 
     return {
         "task": task_name,
@@ -136,10 +218,12 @@ def run(
         "metrics": metrics,
         "total_samples": total,
         "completed_samples": completed,
-        # Samples the judge would not grade. Counted separately, never as passes: treating a
-        # judge refusal as a pass inflates refusal-style metrics and can turn a failing
-        # model into an auto-approval.
+        # Samples that produced no score at all. Reported so a partially-failed run is
+        # visible rather than silently averaged over fewer samples.
         "unresolved_samples": (total - completed) if (total and completed is not None) else None,
+        # Samples the judge declined to grade, detected from the judge's own response text.
+        "judge_refusal_rate": refusal_rate,
+        "judge_refusal_count": refused_count,
         "error": str(log.error) if log.error else None,
         "log_path": getattr(log, "location", None),
     }

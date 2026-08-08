@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.db import init_db
-from app.routers import preflight, selftest
+from app.routers import leaderboard, policy, preflight, runs, selftest
 
 
 @asynccontextmanager
@@ -39,6 +39,9 @@ app.add_middleware(
 
 app.include_router(preflight.router, prefix="/api")
 app.include_router(selftest.router, prefix="/api")
+app.include_router(runs.router, prefix="/api")
+app.include_router(leaderboard.router, prefix="/api")
+app.include_router(policy.router, prefix="/api")
 
 
 @app.get("/api/health", tags=["health"])

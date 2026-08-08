@@ -29,6 +29,9 @@ class Settings:
     # The matching GATEWAY_BASE_URL / GATEWAY_API_KEY env vars are what Inspect reads.
     gateway_provider: str
     default_judge_model: str
+    # Pre-selected subject model in the UI. Local on purpose: the form must not default to a
+    # paid model, or a mis-click starts a billed run.
+    default_subject_model: str
     # Model the Cisco scanners use for their LLM-as-judge analyzers. Separate from the eval
     # judge because the two jobs differ: one grades benchmark answers, the other reasons about
     # code. Local by default so a scan costs nothing.
@@ -39,10 +42,20 @@ class Settings:
     artifact_dir: Path
     workspace_dir: Path
     policy_path: Path
+    fixtures_dir: Path
 
     @property
     def db_url(self) -> str:
         return f"sqlite:///{self.db_path}"
+
+    @property
+    def submission_roots(self) -> list[Path]:
+        """The only places a non-URL submission may point at.
+
+        Uploads land in the first; the bundled poisoned fixtures live in the second so the
+        acceptance suite can verify detection without network access.
+        """
+        return [self.workspace_dir / "uploads", self.fixtures_dir]
 
     @property
     def gateway_health_url(self) -> str:
@@ -67,11 +80,15 @@ def get_settings() -> Settings:
         # Local by default: routine development and the end-to-end suite must not spend
         # money. Point this at gpt-5.6-luna for real calibration runs.
         default_judge_model=os.environ.get("DEFAULT_JUDGE_MODEL", "qwen35"),
+        default_subject_model=os.environ.get("DEFAULT_SUBJECT_MODEL", "gemma4"),
         scanner_model=os.environ.get("SCANNER_MODEL", "gemma4"),
         db_path=Path(os.environ.get("DB_PATH", data / "governance.db")),
         artifact_dir=Path(os.environ.get("ARTIFACT_DIR", data / "artifacts")),
         workspace_dir=Path(os.environ.get("WORKSPACE_DIR", data / "workspaces")),
         policy_path=Path(os.environ.get("POLICY_PATH", _REPO_ROOT / "backend/policy/policy.yaml")),
+        fixtures_dir=Path(
+            os.environ.get("FIXTURES_DIR", _REPO_ROOT / "backend/tests/fixtures")
+        ),
     )
     for directory in (settings.db_path.parent, settings.artifact_dir, settings.workspace_dir):
         directory.mkdir(parents=True, exist_ok=True)

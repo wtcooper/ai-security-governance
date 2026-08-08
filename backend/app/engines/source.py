@@ -15,6 +15,7 @@ worse than no tool at all.
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 import zipfile
 from dataclasses import dataclass
@@ -160,6 +161,29 @@ def extract_zip(archive: Path, destination: Path) -> AcquiredSource:
         zf.extractall(target)
 
     return AcquiredSource(path=target, kind="zip", origin=archive.name)
+
+
+def resolve_submission_path(origin: str, allowed_roots: list[Path]) -> Path:
+    """Resolve a non-URL submission, refusing anything outside the allowed roots.
+
+    Without this, a client could submit `/etc` or the app's own SQLite file as an "MCP server"
+    and read it back through the findings, since the scanners quote source lines. The
+    identifier field is attacker-controlled, so it must never name an arbitrary path.
+
+    `realpath` is used rather than plain resolution so a symlink inside an allowed root cannot
+    point out of it.
+    """
+    candidate = Path(os.path.realpath(origin))
+    for root in allowed_roots:
+        resolved_root = Path(os.path.realpath(root))
+        if candidate == resolved_root or resolved_root in candidate.parents:
+            if not candidate.exists():
+                raise SourceError(f"no such submission: {origin}")
+            return candidate
+    raise SourceError(
+        "a submission must be an https repository URL or a path inside the uploads "
+        f"directory; {origin!r} is neither"
+    )
 
 
 def workspace_for_run(root: Path, run_id: int) -> Path:

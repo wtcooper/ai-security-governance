@@ -170,12 +170,10 @@ async def _run_scanner_checks(settings: Settings, run_id: int, asset_type: Asset
         if origin.startswith("https://"):
             acquired = await source.clone_repo(origin, workspace)
         else:
-            candidate = Path(origin)
-            if not candidate.exists():
-                raise source.SourceError(f"no such upload: {origin}")
+            # Validated against an allowlist of roots: the identifier is client-controlled,
+            # so it must not be able to name /etc or the app's own database.
+            candidate = source.resolve_submission_path(origin, settings.submission_roots)
             if candidate.is_dir():
-                # A directory already on disk: committed test fixtures, and a mounted path in
-                # a deployment that stages submissions itself.
                 acquired = source.AcquiredSource(path=candidate, kind="dir", origin=origin)
             else:
                 acquired = source.extract_zip(candidate, workspace)

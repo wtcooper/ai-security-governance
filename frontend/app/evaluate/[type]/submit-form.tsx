@@ -12,14 +12,20 @@ import { createRun } from "@/lib/api";
 export function SubmitForm({
   models,
   defaultJudge,
+  defaultSubject,
 }: {
   models: string[];
   defaultJudge: string;
+  defaultSubject: string;
 }) {
   const router = useRouter();
   const subjectCandidates = models.filter((m) => !m.startsWith("mock-"));
 
-  const [identifier, setIdentifier] = useState(subjectCandidates[0] ?? "");
+  // Pre-select the backend's configured default, which is a local model. Falling back to
+  // "whatever sorts first" previously landed on a paid model, so a mis-click billed a run.
+  const [identifier, setIdentifier] = useState(
+    subjectCandidates.includes(defaultSubject) ? defaultSubject : (subjectCandidates[0] ?? ""),
+  );
   const [name, setName] = useState("");
   const [judge, setJudge] = useState(defaultJudge);
   const [limit, setLimit] = useState("");

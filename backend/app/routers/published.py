@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
+from app.engines import safe_fetch
 from app.engines.harvest_catalog import load_catalog
 from app.engines.registry import LLM_CHECKS
 
@@ -108,14 +109,17 @@ def list_published(settings: SettingsDep) -> list[dict[str, Any]]:
 async def extract(request: ExtractRequest, settings: SettingsDep) -> ExtractResponse:
     model = request.model or settings.scanner_model
 
+    # Validated and fetched through safe_fetch: the URL comes from the client, so an
+    # unguarded server-side GET would let this endpoint reach instance metadata, the model
+    # gateway, or this API itself.
     try:
-        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
-            page = await client.get(request.url, headers={"User-Agent": "ai-security-governance"})
-            page.raise_for_status()
+        page_text = await safe_fetch.fetch_text(request.url)
+    except safe_fetch.UnsafeUrlError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"could not fetch {request.url}: {exc}") from exc
 
-    document = _to_text(page.text)[:24_000]
+    document = _to_text(page_text)[:24_000]
     prompt = EXTRACTION_PROMPT.format(
         checks="\n".join(f"- {c.id} (metric: {c.metric_name})" for c in LLM_CHECKS),
         document=document,

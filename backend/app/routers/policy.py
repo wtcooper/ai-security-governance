@@ -25,6 +25,9 @@ def read_policy(settings: SettingsDep) -> dict[str, Any]:
             "default_model": policy.judge_default_model,
             "max_refusal_rate": policy.judge_max_refusal_rate,
         },
+        # Both default to local models so nothing bills by accident.
+        "default_subject_model": settings.default_subject_model,
+        "scanner_model": settings.scanner_model,
         "llm_gates": {
             check_id: {
                 "metric": gate.metric,

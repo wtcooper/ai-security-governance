@@ -60,7 +60,7 @@ export default async function EvaluatePage({
           </p>
         )}
 
-        <ScannerForm assetType={assetType} analyzerModel={policy?.judge.default_model ?? "gemma4"} />
+        <ScannerForm assetType={assetType} analyzerModel={policy?.scanner_model ?? "gemma4"} />
 
         <section className="space-y-3">
           <h2 className="text-sm font-medium">How this is judged</h2>
@@ -119,6 +119,7 @@ export default async function EvaluatePage({
       <SubmitForm
         models={models ?? []}
         defaultJudge={policy?.judge.default_model ?? "qwen35"}
+        defaultSubject={policy?.default_subject_model ?? "gemma4"}
       />
 
       <section className="space-y-3">

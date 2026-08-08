@@ -58,18 +58,9 @@ def decide_llm(
     judge_refusal_rate: float | None = None,
 ) -> DecisionResult:
     """Evaluate the LLM benchmark gates."""
-    # An unreliable judge invalidates the run rather than making it lenient. Checked first:
-    # there is no point comparing scores a judge would not grade.
-    if judge_refusal_rate is not None and judge_refusal_rate > policy.judge_max_refusal_rate:
-        return DecisionResult(
-            decision=Decision.ERROR,
-            reason=(
-                f"Judge unreliable: refused {judge_refusal_rate:.1%} of samples, above the "
-                f"{policy.judge_max_refusal_rate:.1%} limit. No decision can be emitted from "
-                "scores a judge would not grade."
-            ),
-            blocking_reasons=["judge_unreliable"],
-        )
+    judge_unreliable = (
+        judge_refusal_rate is not None and judge_refusal_rate > policy.judge_max_refusal_rate
+    )
 
     # Only gated scores participate. Everything else is display detail.
     gated = {score.check_id: score for score in scores if score.gated}
@@ -121,6 +112,23 @@ def decide_llm(
             decision=Decision.ERROR,
             reason="Policy defines no LLM gates; nothing to decide against.",
             blocking_reasons=["no_gates_configured"],
+        )
+
+    # An unreliable judge invalidates the run rather than making it lenient: a refusal parsed
+    # as "the subject did not comply" inflates refusal-style metrics. The gate outcomes are
+    # still returned so a reviewer can see the numbers that were produced — suppressing them
+    # would hide evidence without adding any safety — but no decision is emitted from them.
+    if judge_unreliable:
+        return DecisionResult(
+            decision=Decision.ERROR,
+            reason=(
+                f"Judge unreliable: refused {judge_refusal_rate:.1%} of samples, above the "
+                f"{policy.judge_max_refusal_rate:.1%} limit. The scores below were computed "
+                "but must not be trusted, so no decision is emitted. Re-run with a different "
+                "judge model."
+            ),
+            gate_outcomes=outcomes,
+            blocking_reasons=["judge_unreliable"],
         )
 
     if blocking:

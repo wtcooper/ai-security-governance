@@ -240,3 +240,40 @@ def test_skill_scanner_verdict_is_honoured_not_rederived(policy):
     outcome = gates.decide_scanner(policy, AssetType.SKILL, {}, scanner_says_safe=False)
     assert outcome.decision is Decision.NEEDS_DEEP_TESTING
     assert any("scanner verdict" in reason for reason in outcome.blocking_reasons)
+
+
+# --- subprocess entry points --------------------------------------------------------------
+
+
+def test_scanner_module_entry_points_are_executable():
+    """Both scanners are invoked as `python -m <module>`; the module must be runnable.
+
+    `skill_scanner.cli` is a PACKAGE with no `__main__`, so `python -m skill_scanner.cli`
+    fails at import time — the real entry point is `skill_scanner.cli.cli`. That mistake cost
+    a whole acceptance run to discover, so it is asserted here where it fails in a second.
+    """
+    import importlib.util
+
+    for module_path, source in (
+        (_module_arg("app/engines/skill_scanner.py"), "skill_scanner"),
+        (_module_arg("app/engines/mcp_scanner.py"), "mcpscanner"),
+    ):
+        assert module_path, f"no `-m` module argument found for {source}"
+        spec = importlib.util.find_spec(module_path)
+        assert spec is not None, f"{module_path} is not importable"
+        # A package is only runnable via -m if it ships a __main__ submodule.
+        if spec.submodule_search_locations is not None:
+            assert importlib.util.find_spec(f"{module_path}.__main__") is not None, (
+                f"{module_path} is a package without __main__, so `python -m {module_path}` "
+                "will fail"
+            )
+
+
+def _module_arg(relative: str) -> str | None:
+    """Read the module passed after `-m` in an engine's argv, so the test tracks the code."""
+    import re
+
+    path = Path(__file__).resolve().parents[1] / relative
+    text = path.read_text()
+    match = re.search(r'"-m",\s*(?:#[^\n]*\n\s*)*(?:#[^\n]*\n\s*)*"([\w.]+)"', text)
+    return match.group(1) if match else None

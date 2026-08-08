@@ -111,6 +111,21 @@ def test_unreliable_judge_errors_and_emits_no_decision(policy):
     assert not result.approved
 
 
+def test_unreliable_judge_still_reports_the_scores_it_produced(policy):
+    """The numbers are shown, clearly untrusted, rather than hidden.
+
+    Suppressing them would remove the evidence a reviewer needs to pick a better judge,
+    without making the run any safer — the decision is already withheld.
+    """
+    scores = _all_passing(policy)
+    result = gates.decide_llm(
+        policy, scores, judge_refusal_rate=policy.judge_max_refusal_rate + 0.45
+    )
+    assert len(result.gate_outcomes) == len(policy.llm_gates)
+    assert "must not be trusted" in result.reason
+    assert "different judge" in result.reason
+
+
 def test_judge_refusal_at_or_below_limit_is_fine(policy):
     result = gates.decide_llm(
         policy, _all_passing(policy), judge_refusal_rate=policy.judge_max_refusal_rate

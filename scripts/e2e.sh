@@ -300,15 +300,32 @@ if [ -n "$RUN_ID" ]; then
 import json,sys
 d=json.load(sys.stdin)
 assert d['status'] in ('complete','failed'), f\"run did not finish: {d['status']}\"
-gates=d['gate_outcomes']
-assert len(gates)==5, f'expected 5 gate outcomes, got {len(gates)}'
-scored=[g for g in gates if g['raw_value'] is not None]
-assert len(scored)==5, f'benchmarks without a score: {[g[\"check_id\"] for g in gates if g[\"raw_value\"] is None]}'
+
+# Criterion 1.2: every benchmark must have produced a score. Read from scores rather than
+# gate_outcomes, because a run invalidated by an unreliable judge deliberately emits no
+# decision - the scores still exist and coverage is still the thing being checked.
+gated=[s for s in d['scores'] if s['gated']]
+ids={s['check_id'] for s in gated}
+expected={'cyse4_multilingual_prompt_injection','cyse4_mitre','cyse4_mitre_frr',
+          'cyse4_instruct','agentdojo'}
+assert ids==expected, f'benchmarks without a score: {sorted(expected-ids)}'
+assert all(s['raw_value'] is not None for s in gated), 'a gated score has no value'
+
 assert d['decision'] in ('auto_approve','needs_deep_testing','error'), d['decision']
-# Criterion 1.9: provenance fields must be populated on the run.
+
+# Criterion 1.8: if the judge refused too much, the run must be ERROR with no approval.
+rate=d['judge_refusal_rate']
+if rate is not None and rate > 0.05:
+    assert d['decision']=='error', f'judge refused {rate:.0%} but decision was {d[\"decision\"]}'
+    assert 'judge' in (d['decision_reason'] or '').lower()
+    print('  JUDGE GUARD FIRED: refusal', f'{rate:.0%}', '-> error, no decision emitted')
+else:
+    assert d['decision'] != 'error', d['decision_reason']
+
+# Criterion 1.9: provenance recorded.
 assert d['judge_model'], 'judge model not recorded'
 assert d['policy_hash'], 'policy hash not recorded'
-# Criterion 1.4: ungated extras recorded but never turned into gates.
+# Criterion 1.4: ungated extras recorded but never thresholded.
 extras=[s for s in d['scores'] if not s['gated']]
 assert extras, 'no ungated metrics captured - extras should be stored for inspection'
 assert all(s['threshold'] is None for s in extras), 'an ungated metric was given a threshold'
@@ -316,11 +333,11 @@ assert all(s['threshold'] is None for s in extras), 'an ungated metric was given
 assert d['composite_is_display_only'] is True
 print('  decision:', d['decision'])
 print('  composite (display only):', d['composite_score'])
-for g in gates:
-    print(f\"    {'pass' if g['passed'] else 'FAIL'}  {g['check_id']}: {g['reason']}\")
+for s in sorted(gated, key=lambda x: x['check_id']):
+    print(f\"    {'pass' if s['passed'] else 'FAIL'}  {s['check_id']}: {s['metric']}={s['raw_value']}\")
 " 2>&1 | tee /tmp/e2e-run-detail.txt | grep -q "decision:"; then
-        pass "all 5 benchmarks scored, decision emitted, extras ungated"
-        sed -n '2,20p' /tmp/e2e-run-detail.txt
+        pass "all 5 benchmarks scored; decision and judge guard behaved correctly"
+        sed -n '1,20p' /tmp/e2e-run-detail.txt
     else
         fail "real governance run" "$(cat /tmp/e2e-run-detail.txt 2>/dev/null)"
     fi

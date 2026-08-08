@@ -115,7 +115,9 @@ async def scan_skill(
     argv = [
         sys.executable,
         "-m",
-        "skill_scanner.cli",
+        # Entry point is skill_scanner.cli.cli:main. `skill_scanner.cli` alone is a PACKAGE
+        # with no __main__, so `python -m skill_scanner.cli` fails at import time.
+        "skill_scanner.cli.cli",
         "scan",
         str(source_path),
         "--use-behavioral",

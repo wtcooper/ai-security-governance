@@ -1,0 +1,82 @@
+# Bundled LiteLLM AI gateway — the single OpenAI-compatible surface every compute engine
+# in this project talks to (Inspect AI, mcp-scanner, skill-scanner).
+#
+# Nothing in the app ever holds a provider-native model string or a direct provider key.
+# The app only ever sees the `model_name` aliases below. Swap the upstreams here and the
+# app is unchanged — that is the whole point.
+#
+# Runs in its own container because `litellm[proxy]` requires boto3>=1.43.1 while
+# `inspect-ai` requires aioboto3, which caps boto3<1.40.62. See
+# backend/tests/test_engine_coexistence.py.
+#
+# ALIAS RULE: no slashes and no colons in `model_name`. Inspect parses its model strings as
+# `openai-api/<provider>/<model>` and splits on "/", so `gemma4:e2b` must be aliased.
+
+model_list:
+  # ---- Mock providers (zero API keys; wiring proof only) ---------------------
+  - model_name: mock-target-compliant
+    litellm_params:
+      model: mock-target/compliant
+  - model_name: mock-target-refusal
+    litellm_params:
+      model: mock-target/refusal
+  - model_name: mock-target-policy-block
+    litellm_params:
+      model: mock-target/policy-block
+  - model_name: mock-judge
+    litellm_params:
+      model: mock-judge/judge
+
+  # ---- Default judge / grader ------------------------------------------------
+  # gpt-5.6-luna: $0.20/$1.20 per M tokens, 1.05M context. Cheap enough to grade a
+  # governance run for cents. Key comes from ./.env (OPENAI_API_KEY).
+  - model_name: gpt-5.6-luna
+    litellm_params:
+      model: openai/gpt-5.6-luna
+      api_key: os.environ/OPENAI_API_KEY
+
+  # ---- Fallback judge / cheap real subject ------------------------------------
+  # Used when the primary judge refuses too much cyber content to be reliable.
+  # $0.30/$2.50 per M tokens, 1M context.
+  - model_name: gemini-3.5-flash-lite
+    litellm_params:
+      model: gemini/gemini-3.5-flash-lite
+      api_key: os.environ/GEMINI_API_KEY
+
+  # ---- Local Ollama subject models (free; keeps build costs at zero) ----------
+  # OLLAMA_API_BASE defaults to the host in compose; the `local-models` profile
+  # overrides it to the in-cluster service.
+  - model_name: gemma4
+    litellm_params:
+      model: ollama/gemma4
+      api_base: os.environ/OLLAMA_API_BASE
+      timeout: 600
+      num_ctx: 16384
+  - model_name: gemma4-e2b
+    litellm_params:
+      model: ollama/gemma4:e2b
+      api_base: os.environ/OLLAMA_API_BASE
+      timeout: 600
+      num_ctx: 16384
+  - model_name: qwen35
+    litellm_params:
+      model: ollama/qwen3.5
+      api_base: os.environ/OLLAMA_API_BASE
+      timeout: 600
+      num_ctx: 16384
+
+  # ---- Additional real upstreams: add here, no app changes needed -------------
+  # - model_name: claude-haiku-4-5
+  #   litellm_params:
+  #     model: anthropic/claude-haiku-4-5
+  #     api_key: os.environ/ANTHROPIC_API_KEY
+
+litellm_settings:
+  custom_provider_map:
+    - provider: mock-target
+      custom_handler: mock_handlers.mock_target_llm
+    - provider: mock-judge
+      custom_handler: mock_handlers.mock_judge_llm
+
+general_settings:
+  master_key: os.environ/GATEWAY_API_KEY

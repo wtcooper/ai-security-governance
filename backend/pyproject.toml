@@ -1,0 +1,35 @@
+[project]
+name = "ai-security-governance-backend"
+version = "0.1.0"
+description = "Security-focused evaluation and governance thresholds for AI assets"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.120",
+    "uvicorn[standard]>=0.38",
+    "sqlmodel>=0.0.27",
+    "httpx>=0.28",
+    "pyyaml>=6.0",
+    "python-multipart>=0.0.20",
+    "inspect-ai>=0.3.253",
+    "inspect-evals[cyberseceval-4,agentdojo]>=0.16.0",
+    "cisco-ai-mcp-scanner>=4.8.3",
+    "cisco-ai-skill-scanner>=2.0.13",
+    # Explicit floor: litellm arrives transitively via both Cisco scanners. 1.82.7/1.82.8
+    # were the malicious TeamPCP releases (2026-03-24); safe ranges are <=1.82.6 or >=1.83.0.
+    # Pinning here so no future resolution can land on them.
+    "litellm>=1.85.1,<2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4",
+    "pytest-asyncio>=1.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100

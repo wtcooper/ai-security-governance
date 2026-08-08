@@ -216,3 +216,19 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ---- ai-security-governance ----------------------------------------------
+# Host venv for the LiteLLM gateway. Separate from backend/.venv because
+# litellm[proxy] and inspect-ai cannot share an environment (boto3 conflict).
+.venv-gateway/
+
+# SQLite database, eval logs, scanner reports, per-run clone workspaces.
+data/
+
+# Frontend
+node_modules/
+.next/
+next-env.d.ts
+
+# Playwright MCP scratch output
+.playwright-mcp/

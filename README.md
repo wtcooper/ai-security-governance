@@ -181,6 +181,106 @@ When the distribution shows `block_on` is discriminating rather than firing on e
 Note that `mcp-scanner` has no CRITICAL severity — HIGH is the top of its scale and is what
 blocks there. `skill-scanner` does emit CRITICAL.
 
+## Security testing of this tool
+
+A tool that evaluates the security of other people's code should be able to show its own
+results. Everything below was run against this repository.
+
+### Code review
+
+An automated security review of the codebase found **two MEDIUM issues, both real, both since
+fixed** with regression tests. Both were containment failures rather than crashes, which is the
+class that matters here: this tool deliberately clones untrusted repositories and unzips
+untrusted archives, so the property under test is that a submission cannot reach beyond itself.
+
+**1. Symlink escape from a cloned repository.** `git clone` checked out symlinks, and the scan
+path then followed them: the file walk used `is_file()` (which follows a link) with the suffix
+taken from the *link* name, and the bounded-scan staging step used `shutil.copy2`, which
+dereferences by default. That last step copied the target's bytes into a fresh scan root as an
+ordinary file — laundering external content past `mcp-scanner`'s own symlink guard, which only
+rejects things still shaped like symlinks. Reproduced with a submission of 41 filler files plus
+`0leak.py -> outside.env`; the linked file's contents landed in the run workspace. Fixed with
+`-c core.symlinks=false` on clone, symlink and resolve-inside-root checks in the walk, and
+`follow_symlinks=False` when staging. The zip path already refused symlink members; the clone
+path is now consistent with it.
+
+**2. SSRF guard weaknesses.** Two separate problems. The guard resolved the hostname and checked
+every address, then handed the URL *string* to the HTTP client, which resolved again — two
+lookups, so a name whose records changed in between was fetched having never been validated. And
+the address filter (`is_private`, `is_loopback`, `is_link_local`, …) is not equivalent to
+"globally routable": `100.64.0.1` in carrier-grade NAT space passed. Fixed by connecting to the
+validated literal address with `Host` and SNI preserved, and by checking `is_global` plus an
+explicit deny for `192.88.99.0/24` and `2002::/16` — the 6to4 relay prefixes, which report
+`is_global == True`.
+
+One further item was fixed as hardening rather than a finding: the scanner subprocesses received
+the whole environment while eval subprocesses were scrubbed. No egress path existed (the backend
+container is never given provider keys), but the asymmetry is how a leak appears after a config
+change.
+
+### Checked and cleared
+
+Recorded because what was examined and found safe is as informative as what was flagged:
+
+- **Zip-slip and zip symlink members** — absolute paths and any `..` component rejected before
+  extraction; symlink members refused outright.
+- **Submission-path allowlist** — `realpath` applied before a component-wise ancestor test, so
+  `…/uploads-evil` and `…/uploads/../../etc/passwd` both fail, as do case-variant paths.
+- **Upload filename handling** — the write path comes from a server-side counter; the client
+  filename is used only for the extension check.
+- **Command and argument injection** — all five subprocess call sites use argument lists, never a
+  shell. Submission-derived paths are absolute and server-rooted, and model aliases are wrapped
+  into `openai-api/gateway/<alias>`, so neither can be parsed as a flag.
+- **SSRF via IP encodings** — decimal, octal, short-form, IPv4-mapped IPv6 and NAT64 forms are
+  normalised by resolution before the check and blocked.
+- **Redirect handling** — redirects are followed manually with each hop re-validated, so an
+  allowed host cannot bounce the fetch to a forbidden one.
+- **`hf_repo_id` interpolation** — reaches only the path of a URL whose scheme and host are
+  fixed literals; no payload moves the request off the host.
+- **Credentials in responses** — no path was found by which a provider key reaches a response
+  body, a log line, or an artifact.
+- **Gate-logic bypass** — the gate reads only gated scores, compares raw values against raw
+  thresholds, treats a missing score or unreliable judge or failed scan as blocking, and never
+  reads the composite.
+- **Executing submitted code** — the dependency audit runs with `--no-deps --disable-pip` on a
+  requirements *file*, so no build backend runs; clones use `--recurse-submodules=no` and
+  `core.hooksPath=/dev/null`. Nothing from a submission executes.
+- **Frontend XSS** — no `dangerouslySetInnerHTML`, `innerHTML`, `srcdoc`, `eval` or
+  `new Function` anywhere; scanner findings render as React text children.
+
+### Detection calibration
+
+`scripts/calibrate.sh` runs the pipeline over the labelled corpora the Cisco scanner repos ship
+and scores it against their ground truth. Analyzer model `gemma4` running locally, policy v1,
+**$0 spend**:
+
+| Corpus | Malicious | Detected | Recall | Benign | Flagged | FP rate |
+|---|---|---|---|---|---|---|
+| MCP servers | 14 | 12 | **86%** | 2 | 1 | **50%** ⚠️ |
+| Agent skills | 17 | 15 | **88%** | 4 | 0 | **0%** |
+
+Missed: `injection-attacks`, `template-injection` (MCP); `sql-injection`,
+`test_skills-malicious` (skills). All four produced zero findings rather than findings we
+mis-scored. The EICAR miss is explainable — it is an antivirus test file, and the VirusTotal
+analyzer is off by default.
+
+**The most useful result is the worst one.** A legitimate benign MCP server
+(`evals/remote/benign/GitHub_tools`) was flagged HIGH — 1 of the 2 benign MCP servers that
+produced a result. That is direct evidence the MCP severity rule is not yet safe to auto-approve
+against, and it is why MCP stays in `advisory` mode. The skill rule looks better: all four safe
+skills produced zero findings.
+
+A third benign MCP server (`azure_tools`) **timed out at 900s**, which is the scan-time
+limitation below, measured rather than asserted.
+
+### What this does not establish
+
+- Recall is measured on one sample per MCP threat category, not all 141 servers.
+- The false-positive denominators are 2 and 4. Enough to show the skill rule discriminates and
+  that the MCP rule does not yet; nowhere near enough to justify auto-approval.
+- The corpora are the scanner vendor's own, so they are likely favourable to their detections.
+- No third-party penetration test.
+
 ## Known limitations
 
 Worth reading before trusting a result:
@@ -194,7 +294,8 @@ Worth reading before trusting a result:
 - **Scan time scales with file count.** A single-server submission takes ~40 seconds including the
   dependency audit. Monorepos are slow because the behavioral analyzer invokes a model per source
   file, so they are capped at 40 files with the shortfall reported *as a finding*. Submit one
-  server, not a monorepo.
+  server, not a monorepo. Calibration showed this is not hypothetical: one benign server in the
+  vendor corpus hit the 900s timeout and produced no result at all.
 - **Tools are not enumerated live.** Getting a server's real tool list means launching it, which
   is executing untrusted code. Detection is therefore source-based and cannot see tools generated
   at runtime.

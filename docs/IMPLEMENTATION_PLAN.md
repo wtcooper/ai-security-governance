@@ -609,7 +609,7 @@ safe skills. That is enough to catch a rule that fires on everything, not enough
 auto-approval. Graduating MCP from `advisory` to `gating` still needs benign servers added —
 a set of well-known public servers, scanned and reviewed once, would do it.
 
-**Phase 7 — Frontend visual design.**
+**Phase 7 — Frontend visual design. ✅ COMPLETE (commit `c754f27`)**
 
 The UI is currently unstyled beyond layout: functional, but it does not read as a tool you
 would trust with an approval decision. This phase gives it a considered visual identity.
@@ -642,6 +642,21 @@ decision, the gate table, and severity.
 | 7.4 | Decision, gate table, and severity remain the highest-contrast elements on their pages |
 | 7.5 | Colour is never the only carrier of meaning — decisions and severities keep a text label beside the icon |
 | 7.6 | `npm run build` clean; existing acceptance criteria 0.11 and 1.9 (page content) still pass |
+
+*As built:*
+- Tokens live on `:root` in `globals.css`: paper `#FBFBFD`, ink `#14181F`, hairline `#E3E6EC`,
+  signals deep teal `#0F6F5C` / dark amber `#9A6400` / brick `#A62A21`. Signal colours were
+  chosen dark enough to stay distinguishable in greyscale, because these records get printed.
+- `app/ui/vocabulary.tsx` is the single source for icon and tone per asset class, decision state
+  and severity. Consistency is structural rather than something to remember.
+- `app/ui/threshold-rule.tsx` is the signature element. It carries an `aria-label` describing the
+  measurement in words, so the reading is available without seeing the mark.
+- IBM Plex Sans + Mono via `next/font/google` — no new dependency, and self-hosted at build time.
+- One unplanned fix landed here: adding `Run.judge_unresolved_rate` broke every query against the
+  existing SQLite volume, because `create_all` never alters existing tables. Deleting the database
+  is the wrong answer for an audit trail, so `db.py` now reconciles additively on startup —
+  nullable columns only, raising on a NOT NULL addition rather than inventing a backfill for
+  decisions already recorded. See `tests/test_schema_reconciliation.py`.
 
 ---
 

@@ -25,19 +25,39 @@ Two rules shape the whole design:
 
 ## Status
 
-**Phase 0 complete** — infrastructure, gateway, and the model-routing path are built and
-verified: 18/18 acceptance criteria green via `scripts/e2e.sh`, including real Inspect AI
-evals (subject *and* model-graded judge) running through the gateway to local models.
-Evaluation engines land in later phases.
+**All phases built and verified** against a real stack via `scripts/e2e.sh`, with every
+model call going to local Ollama models so a full acceptance run costs $0.
 
 | Phase | Scope | State |
 |---|---|---|
-| 0 | Compose stack, LiteLLM gateway, preflight, model discovery, landing page | ✅ done |
-| 1 | LLM path: 5 CyberSecEval-4/AgentDojo gates, judge integrity, leaderboard | next |
-| 2 | Open-weight supply-chain scan (Hugging Face scanners + `modelaudit` fallback) | planned |
-| 3 | MCP server path (`mcp-scanner`, full analyzer sweep) | planned |
-| 4 | Agent skill path (`skill-scanner`, full analyzer sweep) | planned |
-| 5 | Threshold calibration, published-score ingestion, docs | planned |
+| 0 | Compose stack, LiteLLM gateway, preflight, model discovery | ✅ |
+| 1 | LLM path: 5 CyberSecEval-4/AgentDojo gates, judge integrity, leaderboard | ✅ |
+| 2 | Open-weight supply-chain scan (5 Hugging Face scanners) | ✅ |
+| 3 | MCP server path (`mcp-scanner`, full analyzer sweep) | ✅ |
+| 4 | Agent skill path (`skill-scanner`, full analyzer sweep) | ✅ |
+| 5 | Policy-as-data, published-score ingestion, severity stats | ✅ |
+
+**One thing is deliberately not done: the thresholds are not calibrated.** They are
+structurally correct placeholders. Calibrating them requires runs against models whose
+behaviour the org actually cares about, and local models cannot stand in for that. It is one
+funded run away, and it changes `policy.yaml` only — the mechanism is built and tested.
+
+### What each asset class is judged on
+
+| Asset | Evaluation | Gate |
+|---|---|---|
+| Foundation model | 5 CyberSecEval-4 / AgentDojo benchmarks via Inspect AI | one threshold per benchmark, on that benchmark's own headline metric |
+| Open weights | 5 Hugging Face scanners, harvested not recomputed | any file any scanner calls unsafe blocks; "not scanned" ≠ safe |
+| MCP server | full `mcp-scanner` sweep of cloned source | severity rule, **advisory** in v1 |
+| Agent skill | full `skill-scanner` sweep | severity rule + the scanner's own `is_safe`, **advisory** in v1 |
+
+For MCP servers and skills, **the scanner is the evaluation.** No benchmark scores a specific
+server or skill — MCP-Bench, MCP-Universe, MCPSecBench and MCP-SafetyBench all measure how a
+*client model* behaves when handed servers. And because scanner findings have no fixed
+denominator (a count tracks how much code there is, not how dangerous it is), the gate is a
+severity rule rather than a score: normalising findings to 0–100 and thresholding that would
+be inventing precision. Both start in advisory mode, which can withhold approval but never
+grant it, because there is no false-positive baseline yet.
 
 ## Quick start
 
@@ -249,8 +269,69 @@ bash gateway/start_proxy.sh
 cd frontend && npm install && npm run dev
 ```
 
+## Operating it
+
+### Calibrating the thresholds
+
+`backend/policy/policy.yaml` is the gate; the code only evaluates it. Every run records the
+policy version and a content hash, so a threshold edited next month does not silently rewrite
+the meaning of a decision made today.
+
+To calibrate: point `DEFAULT_JUDGE_MODEL` at a hosted judge, run 2–3 models you have already
+approved, and adjust thresholds until those models come back `auto_approve`. Nothing else
+changes — a test asserts that a stored run re-decides differently when only the YAML changes.
+
+### Graduating MCP/skill from advisory to gating
+
+Both scanner-backed classes ship as `mode: advisory`, which can withhold approval but never
+grant it. That is deliberate: without a false-positive baseline, an untuned severity rule
+cannot be trusted to approve anything.
+
+```bash
+curl -s localhost:8000/api/stats/severity   # findings by analyzer and severity, all runs
+```
+
+When the distribution shows that `block_on` is discriminating rather than firing on
+everything, change `mode: advisory` to `mode: gating` for that asset class. That single line
+is the whole change.
+
+Bear in mind `mcp-scanner` has no CRITICAL severity — HIGH is the top of its scale, so HIGH is
+what actually blocks there. `skill-scanner` does emit CRITICAL.
+
+### Adding a published score
+
+```bash
+curl -s -X POST localhost:8000/api/published-scores/extract \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://.../system-card"}'      # proposes candidates, saves nothing
+```
+
+Review each candidate against its quoted sentence, then POST the ones you believe to
+`/api/published-scores`. The confirmation step is not ceremony: an unreviewed number
+extracted by a model reading prose could auto-approve a model that was never measured.
+
+### Known limitations, stated plainly
+
+- **Thresholds are uncalibrated placeholders.** See above.
+- **MCP/skill scans are slow.** The behavioral analyzer runs a model per source file. A
+  monorepo is capped at 40 files and the shortfall is reported as a finding — a scan that
+  silently covered part of a tree reads exactly like a scan that found nothing. Submit the
+  individual server directory rather than a monorepo.
+- **Tools are not enumerated live.** Getting a server's real tool list means launching it,
+  which is executing untrusted code. Detection therefore comes from source analysis and
+  cannot see tools generated at runtime.
+- **Dependency audit covers pinned packages only.** pip-audit's resolution venv aborts on
+  some hosts, and when it fails the scanner reports "SAFE (0 findings)". We detect that and
+  record it as a finding instead, running the audit with `--no-deps --disable-pip`.
+- **No Docker eval tier.** `cyse2_interpreter_abuse`, `cyse2_vulnerability_exploit`,
+  `cybench`, `cve_bench` and AgentDojo's sandbox suites need Docker-in-Docker. The five
+  shipped benchmarks are all pure-API by design.
+
 ## Deployment
 
-Not deployed anywhere — local only. Each component builds independently, so an
-organisation can take any one of them and run it their own way. Swapping SQLite for a
-hosted database is the one change most deployments will want.
+Not deployed anywhere — local only. Each component builds independently, so an organisation
+can take any one of them and run it their own way.
+
+Swapping SQLite for a hosted database is the one change most deployments will want: all DB
+access goes through SQLModel, so it is a connection-string change in `app/config.py` rather
+than a rewrite.

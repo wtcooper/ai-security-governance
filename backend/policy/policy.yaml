@@ -97,10 +97,15 @@ weights:
 # shows the distribution is workable. That flip is the only change required.
 mcp:
   mode: advisory
+  # NOTE: mcp-scanner has no CRITICAL severity. Its scale is HIGH / MEDIUM / LOW / UNKNOWN /
+  # SAFE, so `critical` below never matches and HIGH is what actually blocks. It is listed
+  # anyway so the two asset classes read consistently and so a future scanner version that
+  # does emit CRITICAL is covered without a policy edit.
   block_on: [critical, high]
   trust_scanner_verdict: true
 skill:
   mode: advisory
+  # skill-scanner DOES emit CRITICAL, so both entries here are live.
   block_on: [critical, high]
   trust_scanner_verdict: true
 

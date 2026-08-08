@@ -90,6 +90,13 @@ def get_settings() -> Settings:
             os.environ.get("FIXTURES_DIR", _REPO_ROOT / "backend/tests/fixtures")
         ),
     )
-    for directory in (settings.db_path.parent, settings.artifact_dir, settings.workspace_dir):
+    # The uploads directory is created eagerly because it is one of the two roots a
+    # submission may point at, and an allowlist root that does not exist is easy to misread.
+    for directory in (
+        settings.db_path.parent,
+        settings.artifact_dir,
+        settings.workspace_dir,
+        settings.workspace_dir / "uploads",
+    ):
         directory.mkdir(parents=True, exist_ok=True)
     return settings

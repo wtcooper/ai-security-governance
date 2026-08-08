@@ -19,6 +19,15 @@ from dataclasses import dataclass, field
 from app.models import AssetType, Decision, Score, Severity
 from app.scoring.policy import Policy
 
+__all__ = [
+    "Decision",
+    "DecisionResult",
+    "GateOutcome",
+    "decide_llm",
+    "decide_scanner",
+    "decide_weights",
+]
+
 
 @dataclass
 class GateOutcome:

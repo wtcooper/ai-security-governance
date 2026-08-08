@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+from pathlib import Path
 
 from sqlmodel import Session, select
 
@@ -60,7 +61,15 @@ async def _execute_run(
     settings = get_settings()
     async with _RUN_SEMAPHORE:
         try:
-            await _run_llm_checks(settings, run_id, limit, only_checks)
+            with session_scope() as session:
+                run = session.get(Run, run_id)
+                asset = session.get(Asset, run.asset_id) if run else None
+                asset_type = asset.type if asset else None
+
+            if asset_type in (AssetType.MCP, AssetType.SKILL):
+                await _run_scanner_checks(settings, run_id, asset_type)
+            else:
+                await _run_llm_checks(settings, run_id, limit, only_checks)
         except Exception as exc:  # noqa: BLE001 - a crashed job must still close out the run
             with session_scope() as session:
                 run = session.get(Run, run_id)
@@ -130,6 +139,137 @@ async def _run_llm_checks(
     # across checks rather than judged per check.
     overall_refusal = max(refusal_rates) if refusal_rates else None
     _finalize_run(run_id, policy, overall_refusal, weights_outcome)
+
+
+async def _run_scanner_checks(settings: Settings, run_id: int, asset_type: AssetType) -> None:
+    """MCP server / agent skill: acquire the source, sweep it, decide on a severity rule."""
+    import json
+
+    from app.engines import mcp_scanner, skill_scanner, source
+
+    policy = get_policy(settings.policy_path)
+
+    with session_scope() as session:
+        run = session.get(Run, run_id)
+        if run is None:
+            return
+        asset = session.get(Asset, run.asset_id)
+        if asset is None:
+            return
+        run.status = RunStatus.RUNNING
+        run.policy_version = policy.version
+        run.policy_hash = policy.content_hash
+        session.add(run)
+        session.commit()
+        origin = asset.source_url or asset.identifier
+
+    workspace = source.workspace_for_run(settings.workspace_dir, run_id)
+
+    # Acquire read-only. Nothing from the submission is ever executed.
+    try:
+        if origin.startswith("https://"):
+            acquired = await source.clone_repo(origin, workspace)
+        else:
+            candidate = Path(origin)
+            if not candidate.exists():
+                raise source.SourceError(f"no such upload: {origin}")
+            if candidate.is_dir():
+                # A directory already on disk: committed test fixtures, and a mounted path in
+                # a deployment that stages submissions itself.
+                acquired = source.AcquiredSource(path=candidate, kind="dir", origin=origin)
+            else:
+                acquired = source.extract_zip(candidate, workspace)
+    except source.SourceError as exc:
+        _record_scanner_failure(run_id, f"Could not acquire source: {exc}")
+        return
+
+    if asset_type is AssetType.MCP:
+        result = await mcp_scanner.scan_source(settings, acquired.path)
+        scanner_safe = result.scanner_says_safe
+    else:
+        result = await skill_scanner.scan_skill(settings, acquired.path)
+        scanner_safe = result.scanner_says_safe
+
+    with session_scope() as session:
+        if result.raw:
+            artifact_path = settings.artifact_dir / f"{asset_type.value}-scan-run{run_id}.json"
+            artifact_path.write_text(json.dumps(result.raw, indent=2))
+            session.add(
+                Artifact(
+                    run_id=run_id,
+                    kind=f"{asset_type.value}_scanner_json",
+                    path=str(artifact_path),
+                )
+            )
+
+        for finding in result.findings:
+            session.add(
+                Finding(
+                    run_id=run_id,
+                    analyzer=finding.analyzer,
+                    severity=finding.severity,
+                    rule_id=finding.rule_id,
+                    title=finding.title,
+                    detail=finding.detail,
+                    file_path=finding.file_path,
+                )
+            )
+
+        run = session.get(Run, run_id)
+        if run:
+            run.engine_version = result.engine_version
+            run.ruleset_version = result.ruleset_version
+            if result.errors:
+                run.error = "\n".join(result.errors)[:4000]
+
+            outcome = gates.decide_scanner(
+                policy,
+                asset_type,
+                result.severity_counts(),
+                scanner_says_safe=scanner_safe,
+                scan_failed=not result.ok,
+            )
+            run.decision = outcome.decision
+            run.decision_reason = outcome.reason
+            run.status = (
+                RunStatus.FAILED if outcome.decision is Decision.ERROR else RunStatus.COMPLETE
+            )
+            run.finished_at = _utcnow()
+            session.add(run)
+
+        # Severity roll-up for leaderboard ordering only, stored ungated so the gate
+        # evaluator cannot read it.
+        session.add(
+            Score(
+                run_id=run_id,
+                check_id=f"{asset_type.value}.severity_rollup",
+                metric="severity_rollup",
+                raw_value=normalize.severity_rollup(
+                    result.severity_counts(), policy.severity_penalty
+                ),
+                normalized=normalize.severity_rollup(
+                    result.severity_counts(), policy.severity_penalty
+                ),
+                gated=False,
+                provenance=Provenance.SELF_RUN,
+            )
+        )
+        session.commit()
+
+
+def _record_scanner_failure(run_id: int, message: str) -> None:
+    with session_scope() as session:
+        run = session.get(Run, run_id)
+        if run is None:
+            return
+        run.status = RunStatus.FAILED
+        # A scan that did not happen is an error, never a pass.
+        run.decision = Decision.ERROR
+        run.decision_reason = message
+        run.error = message
+        run.finished_at = _utcnow()
+        session.add(run)
+        session.commit()
 
 
 async def _harvest_weight_scan(settings: Settings, run_id: int, repo_id: str):

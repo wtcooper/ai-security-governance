@@ -7,6 +7,7 @@ import {
   fetchPolicy,
   type AssetType,
 } from "@/lib/api";
+import { ScannerForm } from "./scanner-form";
 import { SubmitForm } from "./submit-form";
 
 const TITLES: Record<AssetType, { title: string; blurb: string }> = {
@@ -44,16 +45,59 @@ export default async function EvaluatePage({
   const copy = TITLES[assetType];
 
   if (assetType !== "llm") {
+    const scannerPolicy = policy?.scanner?.[assetType];
     return (
-      <div className="space-y-6">
-        <h1 className="text-2xl font-semibold tracking-tight">{copy.title}</h1>
-        <div className="rounded-lg border border-edge bg-surface p-6">
-          <p className="text-sm text-warn">Not implemented yet.</p>
-          <p className="mt-2 text-sm text-muted">{copy.blurb}</p>
-          <Link href="/" className="mt-4 inline-block text-sm text-accent hover:underline">
+      <div className="space-y-8">
+        <section className="space-y-2">
+          <h1 className="text-2xl font-semibold tracking-tight">{copy.title}</h1>
+          <p className="max-w-2xl text-sm leading-relaxed text-muted">{copy.blurb}</p>
+        </section>
+
+        {!gateway?.ok && (
+          <p className="rounded border border-fail/40 bg-fail/10 px-4 py-3 text-sm text-fail">
+            The model gateway is unreachable. The scanner&apos;s LLM analyzer runs through it,
+            so a scan cannot start.
+          </p>
+        )}
+
+        <ScannerForm assetType={assetType} analyzerModel={policy?.judge.default_model ?? "gemma4"} />
+
+        <section className="space-y-3">
+          <h2 className="text-sm font-medium">How this is judged</h2>
+          <p className="text-xs leading-relaxed text-muted">
+            There is no benchmark that scores a specific MCP server or skill — the published
+            MCP benchmarks measure how a <em>client model</em> behaves when given servers, not
+            whether a given server is safe. So the scanner is the evaluation, and the gate is a
+            severity rule rather than a score: scanner findings have no fixed denominator, so a
+            0&ndash;100 threshold over them would be invented precision.
+          </p>
+          {scannerPolicy && (
+            <dl className="grid gap-x-6 gap-y-2 rounded-lg border border-edge bg-surface p-4 text-xs sm:grid-cols-2">
+              <div className="flex justify-between gap-4">
+                <dt className="text-muted">Mode</dt>
+                <dd className="font-mono">{scannerPolicy.mode}</dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-muted">Blocks on</dt>
+                <dd className="font-mono">{scannerPolicy.block_on.join(", ")}</dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-muted">Trusts scanner verdict</dt>
+                <dd className="font-mono">{String(scannerPolicy.trust_scanner_verdict)}</dd>
+              </div>
+            </dl>
+          )}
+          {scannerPolicy?.mode === "advisory" && (
+            <p className="rounded border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-warn">
+              Advisory mode: every result goes to human review and nothing is auto-approved,
+              because the severity rule has no false-positive baseline yet. Flip{" "}
+              <code>mode: gating</code> in policy.yaml once the distribution is understood.
+            </p>
+          )}
+          <Link href="/" className="inline-block text-sm text-accent hover:underline">
             Back to asset classes
           </Link>
-        </div>
+        </section>
       </div>
     );
   }

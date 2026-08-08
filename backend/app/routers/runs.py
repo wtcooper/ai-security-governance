@@ -116,19 +116,18 @@ async def create_run(
     policy = get_policy(settings.policy_path)
     judge = request.judge_model or policy.judge_default_model
 
-    if request.asset_type is not AssetType.LLM:
-        raise HTTPException(
-            status_code=501,
-            detail=(
-                f"{request.asset_type.value} evaluation is not implemented yet. "
-                "LLM evaluation is available."
-            ),
-        )
-
     # Refuse to start an expensive run against a route that does not work. This is the whole
     # reason preflight exists — the historical failure was discovering broken model routing
     # part-way through an eval.
-    for role, alias in (("subject", request.identifier), ("judge", judge)):
+    #
+    # For scanner-backed assets only the analyzer model is exercised; there is no subject
+    # model, because the artifact under test is code rather than a model.
+    if request.asset_type is AssetType.LLM:
+        to_check = (("subject", request.identifier), ("judge", judge))
+    else:
+        to_check = (("scanner analyzer", settings.scanner_model),)
+
+    for role, alias in to_check:
         result = await gateway.preflight(settings, alias)
         if not result.ok:
             raise HTTPException(
@@ -145,12 +144,17 @@ async def create_run(
         identifier=request.identifier,
         provider=request.provider,
         hf_repo_id=request.hf_repo_id,
+        source_url=request.identifier if request.asset_type is not AssetType.LLM else None,
     )
     session.add(asset)
     session.commit()
     session.refresh(asset)
 
-    run = Run(asset_id=asset.id, gateway_model=request.identifier, judge_model=judge)
+    run = Run(
+        asset_id=asset.id,
+        gateway_model=request.identifier if request.asset_type is AssetType.LLM else None,
+        judge_model=judge if request.asset_type is AssetType.LLM else settings.scanner_model,
+    )
     session.add(run)
     session.commit()
     session.refresh(run)
@@ -206,7 +210,13 @@ def _to_run_out(session: Session, run: Run, asset: Asset, settings: Settings) ->
     findings = list(session.exec(select(Finding).where(Finding.run_id == run.id)))
     artifacts = list(session.exec(select(Artifact).where(Artifact.run_id == run.id)))
 
-    outcome = gates.decide_llm(policy, scores, run.judge_refusal_rate)
+    # Benchmark gates only apply to LLMs. Scanner-backed assets are judged on a severity
+    # rule, so presenting them as unmet benchmark gates would be actively misleading.
+    outcome = (
+        gates.decide_llm(policy, scores, run.judge_refusal_rate)
+        if asset.type is AssetType.LLM
+        else gates.DecisionResult(decision=run.decision or gates.Decision.ERROR, reason="")
+    )
     gate_outs = [
         GateOut(
             check_id=g.check_id,

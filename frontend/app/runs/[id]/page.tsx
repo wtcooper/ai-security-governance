@@ -39,7 +39,8 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
 
       <DecisionPanel run={run} running={running} />
       <Provenance run={run} />
-      <Gates run={run} />
+      {run.asset_type === "llm" && <Gates run={run} />}
+      {run.findings.length > 0 && <Findings run={run} />}
       <ExtraMetrics run={run} />
       {run.artifacts.length > 0 && <Artifacts run={run} />}
       {run.error && (
@@ -202,6 +203,92 @@ function Gates({ run }: { run: Run }) {
                 </tr>
               );
             })}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+const SEVERITY_STYLE: Record<string, string> = {
+  critical: "bg-fail/20 text-fail",
+  high: "bg-fail/15 text-fail",
+  medium: "bg-warn/15 text-warn",
+  low: "bg-edge text-muted",
+  info: "bg-edge text-muted",
+};
+
+const SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"];
+
+function Findings({ run }: { run: Run }) {
+  const counts = run.findings.reduce<Record<string, number>>((acc, finding) => {
+    acc[finding.severity] = (acc[finding.severity] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  const sorted = [...run.findings].sort(
+    (a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity),
+  );
+
+  return (
+    <section className="space-y-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-3">
+        <h2 className="text-sm font-medium">Scanner findings</h2>
+        <div className="flex flex-wrap gap-1.5">
+          {SEVERITY_ORDER.filter((s) => counts[s]).map((severity) => (
+            <span
+              key={severity}
+              className={`rounded px-2 py-0.5 text-[11px] ${SEVERITY_STYLE[severity]}`}
+            >
+              {counts[severity]} {severity}
+            </span>
+          ))}
+        </div>
+      </div>
+      <p className="text-xs text-muted">
+        The gate is a severity rule over these findings, not a score. Findings keep their
+        analyzer attribution so you can slice by engine, but no analyzer subtotal is
+        thresholded.
+      </p>
+      <div className="overflow-x-auto rounded-lg border border-edge">
+        <table className="w-full min-w-[46rem] border-collapse text-sm">
+          <thead className="bg-surface">
+            <tr className="text-left text-xs text-muted">
+              <th className="px-4 py-3 font-medium">Severity</th>
+              <th className="px-4 py-3 font-medium">Analyzer</th>
+              <th className="px-4 py-3 font-medium">Finding</th>
+              <th className="px-4 py-3 font-medium">Location</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((finding, index) => (
+              <tr key={`${finding.rule_id}-${index}`} className="border-t border-edge align-top">
+                <td className="px-4 py-3">
+                  <span
+                    className={`rounded px-2 py-0.5 text-[11px] ${
+                      SEVERITY_STYLE[finding.severity] ?? "bg-edge text-muted"
+                    }`}
+                  >
+                    {finding.severity}
+                  </span>
+                </td>
+                <td className="px-4 py-3 font-mono text-[11px] text-muted">{finding.analyzer}</td>
+                <td className="px-4 py-3">
+                  <div className="text-xs">{finding.title}</div>
+                  {finding.detail && (
+                    <div className="mt-1 max-w-2xl text-[11px] leading-relaxed text-muted">
+                      {finding.detail.slice(0, 400)}
+                    </div>
+                  )}
+                  {finding.rule_id && (
+                    <div className="mt-1 font-mono text-[10px] text-muted">{finding.rule_id}</div>
+                  )}
+                </td>
+                <td className="px-4 py-3 font-mono text-[11px] text-muted">
+                  {finding.file_path ?? "—"}
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>

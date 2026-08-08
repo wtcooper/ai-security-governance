@@ -193,15 +193,40 @@ async def scan_source(
     settings: Settings,
     source_path: Path,
     timeout: float = 1800.0,
+    max_source_files: int = 40,
 ) -> McpScanResult:
     """Full safe-path sweep: behavioral source analysis plus dependency vulnerabilities.
 
     `pypi-scan` and `npm-scan` are deliberately not run: they require a Docker sandbox, which
     is unavailable inside this container, and they download and unpack packages. The
     pip-audit-backed `vulnerable-package` analyzer covers dependency risk without either.
+
+    `max_source_files` bounds the behavioral analyzer, which invokes an LLM per source file —
+    unbounded, a large monorepo would run for hours. When the cap bites it is recorded as a
+    finding, because a scan that silently covered a fraction of the tree reads exactly like a
+    scan that found nothing.
     """
     env = scanner_env(settings)
     result = McpScanResult(ok=True, engine_version=_engine_version())
+
+    scan_target, skipped = _bounded_target(source_path, max_source_files)
+    if skipped:
+        result.findings.append(
+            ScanFinding(
+                analyzer="coverage",
+                severity=Severity.MEDIUM,
+                rule_id="scan_coverage_capped",
+                title=f"Behavioral analysis covered {max_source_files} of {max_source_files + skipped} source files",
+                detail=(
+                    f"{skipped} source file(s) were not analysed, because the behavioral "
+                    "analyzer runs a model per file and an unbounded sweep of a large "
+                    "repository does not finish. Treat the uncovered portion as unassessed "
+                    "rather than clean. Raise max_source_files, or submit the individual "
+                    "server directory instead of a monorepo."
+                ),
+            )
+        )
+    source_path = scan_target
 
     code, stdout, stderr = await _run(
         [sys.executable, "-m", "mcpscanner.cli", "behavioral", str(source_path), "--format", "raw"],
@@ -275,6 +300,50 @@ async def scan_source(
 
     result.ruleset_version = _ruleset_version()
     return result
+
+
+SOURCE_SUFFIXES = (".py", ".js", ".ts", ".mjs", ".cjs", ".tsx", ".jsx")
+SKIP_DIRS = {".git", "node_modules", "venv", ".venv", "dist", "build", "__pycache__", "tests"}
+
+
+def _source_files(root: Path) -> list[Path]:
+    files: list[Path] = []
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or path.suffix.lower() not in SOURCE_SUFFIXES:
+            continue
+        if SKIP_DIRS & set(path.relative_to(root).parts):
+            continue
+        files.append(path)
+    return files
+
+
+def _bounded_target(root: Path, cap: int) -> tuple[Path, int]:
+    """Return a directory to scan, plus how many source files were left out.
+
+    Under the cap, the whole tree is scanned. Over it, a staging directory is built holding
+    the first `cap` files (preserving relative layout so the analyzer still sees module
+    context), and the shortfall is reported by the caller.
+    """
+    files = _source_files(root)
+    if len(files) <= cap:
+        return root, 0
+
+    import shutil
+
+    staged = root.parent / f"{root.name}-bounded"
+    if staged.exists():
+        shutil.rmtree(staged)
+    for path in files[:cap]:
+        destination = staged / path.relative_to(root)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, destination)
+    # Manifests are small and needed by the dependency analyzer.
+    for manifest in ("requirements.txt", "pyproject.toml", "package.json"):
+        for match in sorted(root.rglob(manifest))[:1]:
+            destination = staged / match.relative_to(root)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(match, destination)
+    return staged, len(files) - cap
 
 
 def _pip_audit_failed(output: str) -> bool:

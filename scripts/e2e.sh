@@ -37,6 +37,8 @@ JUDGE_MODEL=qwen35
 # governance run uses the registry defaults instead.
 E2E_RUN_LIMIT=${E2E_RUN_LIMIT:-2}
 E2E_RUN_TIMEOUT=${E2E_RUN_TIMEOUT:-5400}
+# Scanner sweeps invoke a model per source file, so a fixture scan is minutes not seconds.
+E2E_SCAN_TIMEOUT=${E2E_SCAN_TIMEOUT:-2700}
 
 PASS=0
 FAIL=0
@@ -351,6 +353,196 @@ assert r['composite_is_display_only'] is True
     fi
 else
     fail "create run" "$RUN_CREATE"
+fi
+
+# --------------------------------------------------------------------------------------
+section "2.1-2.4  Open-weight supply-chain scan harvested from Hugging Face"
+# --------------------------------------------------------------------------------------
+# Two live repos chosen for what they prove: gpt2 has completed scans, and
+# stable-diffusion-v1-4 has scansDone=false, which is the case that must NOT read as safe.
+HF_OUT=$(curl -sf --max-time 120 -X POST "$BACKEND/api/runs" \
+    -H 'Content-Type: application/json' \
+    -d "{\"asset_type\":\"llm\",\"name\":\"gpt2 weights\",\"identifier\":\"$SUBJECT_MODEL\",\"judge_model\":\"$JUDGE_MODEL\",\"hf_repo_id\":\"openai-community/gpt2\",\"limit\":1,\"only_checks\":[\"cyse4_mitre_frr\"]}" 2>&1)
+HF_RUN_ID=$(echo "$HF_OUT" | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])" 2>/dev/null)
+
+if [ -n "$HF_RUN_ID" ]; then
+    DEADLINE=$((SECONDS + 900))
+    while [ $SECONDS -lt $DEADLINE ]; do
+        HF_JSON=$(curl -sf --max-time 20 "$BACKEND/api/runs/$HF_RUN_ID" 2>/dev/null)
+        HF_STATE=$(echo "$HF_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null)
+        [ "$HF_STATE" = "complete" ] || [ "$HF_STATE" = "failed" ] && break
+        sleep 10
+    done
+    if echo "$HF_JSON" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+arts=[a for a in d['artifacts'] if 'hf-scan' in a]
+assert arts, f\"no hf_scan artifact stored: {d['artifacts']}\"
+" 2>/dev/null; then
+        pass "Hub scan results harvested and stored as a run artifact"
+    else
+        fail "HF scan harvest" "$HF_JSON"
+    fi
+else
+    fail "create HF-backed run" "$HF_OUT"
+fi
+
+# --------------------------------------------------------------------------------------
+section "3.1-3.7  MCP server scan (poisoned fixture, known expected findings)"
+# --------------------------------------------------------------------------------------
+echo "  scanning the deliberately-poisoned MCP fixture through the gateway..."
+MCP_OUT=$(curl -sf --max-time 300 -X POST "$BACKEND/api/runs" \
+    -H 'Content-Type: application/json' \
+    -d '{"asset_type":"mcp","name":"poisoned MCP fixture","identifier":"/srv/fixtures/poisoned_mcp_server"}' 2>&1)
+MCP_RUN_ID=$(echo "$MCP_OUT" | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])" 2>/dev/null)
+
+if [ -n "$MCP_RUN_ID" ]; then
+    DEADLINE=$((SECONDS + E2E_SCAN_TIMEOUT))
+    while [ $SECONDS -lt $DEADLINE ]; do
+        MCP_JSON=$(curl -sf --max-time 20 "$BACKEND/api/runs/$MCP_RUN_ID" 2>/dev/null)
+        MCP_STATE=$(echo "$MCP_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null)
+        [ "$MCP_STATE" = "complete" ] || [ "$MCP_STATE" = "failed" ] && break
+        sleep 15
+    done
+
+    if echo "$MCP_JSON" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+assert d['status'] in ('complete','failed'), d['status']
+findings=d['findings']
+assert findings, 'the poisoned fixture produced no findings at all'
+sev={f['severity'] for f in findings}
+assert sev & {'critical','high'}, f'no blocking-severity finding on a poisoned server: {sev}'
+# 3.2: analyzer attribution retained.
+assert all(f['analyzer'] for f in findings), 'a finding lost its analyzer attribution'
+# 3.5: scanner provenance recorded.
+assert d['engine_version'], 'engine_version not recorded'
+assert d['ruleset_version'], 'ruleset_version not recorded'
+# 3.4: advisory mode must never auto-approve.
+assert d['decision'] != 'auto_approve', 'advisory mode auto-approved an MCP scan'
+print('  decision:', d['decision'])
+print('  engine:', d['engine_version'], '| ruleset:', d['ruleset_version'])
+from collections import Counter
+print('  severities:', dict(Counter(f['severity'] for f in findings)))
+print('  analyzers:', dict(Counter(f['analyzer'] for f in findings)))
+" 2>&1 | tee /tmp/e2e-mcp.txt | grep -q "decision:"; then
+        pass "poisoned MCP fixture: blocking findings, provenance recorded, not auto-approved"
+        sed -n '1,6p' /tmp/e2e-mcp.txt
+    else
+        fail "MCP scan" "$(cat /tmp/e2e-mcp.txt 2>/dev/null)"
+    fi
+else
+    fail "create MCP run" "$MCP_OUT"
+fi
+
+# --------------------------------------------------------------------------------------
+section "4.1-4.4  Agent skill scan (poisoned fixture)"
+# --------------------------------------------------------------------------------------
+echo "  scanning the deliberately-poisoned skill fixture through the gateway..."
+SKILL_OUT=$(curl -sf --max-time 300 -X POST "$BACKEND/api/runs" \
+    -H 'Content-Type: application/json' \
+    -d '{"asset_type":"skill","name":"poisoned skill fixture","identifier":"/srv/fixtures/poisoned_skill"}' 2>&1)
+SKILL_RUN_ID=$(echo "$SKILL_OUT" | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])" 2>/dev/null)
+
+if [ -n "$SKILL_RUN_ID" ]; then
+    DEADLINE=$((SECONDS + E2E_SCAN_TIMEOUT))
+    while [ $SECONDS -lt $DEADLINE ]; do
+        SKILL_JSON=$(curl -sf --max-time 20 "$BACKEND/api/runs/$SKILL_RUN_ID" 2>/dev/null)
+        SKILL_STATE=$(echo "$SKILL_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin)['status'])" 2>/dev/null)
+        [ "$SKILL_STATE" = "complete" ] || [ "$SKILL_STATE" = "failed" ] && break
+        sleep 10
+    done
+
+    if echo "$SKILL_JSON" | python3 -c "
+import json,sys
+from collections import Counter
+d=json.load(sys.stdin)
+findings=d['findings']
+assert findings, 'the poisoned skill produced no findings'
+sev={f['severity'] for f in findings}
+assert 'critical' in sev or 'high' in sev, f'no blocking severity: {sev}'
+assert d['engine_version'], 'engine_version not recorded'
+assert d['ruleset_version'], 'ruleset_version not recorded'
+assert d['decision'] != 'auto_approve', 'advisory mode auto-approved a skill scan'
+print('  decision:', d['decision'])
+print('  ruleset:', d['ruleset_version'])
+print('  severities:', dict(Counter(f['severity'] for f in findings)))
+print('  analyzers:', dict(Counter(f['analyzer'] for f in findings)))
+" 2>&1 | tee /tmp/e2e-skill.txt | grep -q "decision:"; then
+        pass "poisoned skill fixture: blocking findings, verdict honoured, not auto-approved"
+        sed -n '1,6p' /tmp/e2e-skill.txt
+    else
+        fail "skill scan" "$(cat /tmp/e2e-skill.txt 2>/dev/null)"
+    fi
+else
+    fail "create skill run" "$SKILL_OUT"
+fi
+
+# --------------------------------------------------------------------------------------
+section "3.7  Zip upload rejects hostile archives"
+# --------------------------------------------------------------------------------------
+ZIP_SLIP=$(mktemp -d)/slip.zip
+python3 -c "
+import zipfile, sys
+with zipfile.ZipFile('$ZIP_SLIP','w') as z:
+    z.writestr('../../escaped.txt','payload')
+"
+UPLOAD_OUT=$(curl -sf --max-time 60 -X POST "$BACKEND/api/uploads" -F "file=@$ZIP_SLIP" 2>&1)
+UPLOAD_ID=$(echo "$UPLOAD_OUT" | python3 -c "import json,sys; print(json.load(sys.stdin)['identifier'])" 2>/dev/null)
+if [ -n "$UPLOAD_ID" ]; then
+    SLIP_RUN=$(curl -sf --max-time 120 -X POST "$BACKEND/api/runs" \
+        -H 'Content-Type: application/json' \
+        -d "{\"asset_type\":\"skill\",\"name\":\"zip slip probe\",\"identifier\":\"$UPLOAD_ID\"}" 2>&1)
+    SLIP_ID=$(echo "$SLIP_RUN" | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])" 2>/dev/null)
+    sleep 20
+    SLIP_JSON=$(curl -sf --max-time 20 "$BACKEND/api/runs/$SLIP_ID" 2>/dev/null)
+    if echo "$SLIP_JSON" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+assert d['decision'] == 'error', f\"zip-slip archive was not rejected: {d['decision']}\"
+assert 'escape' in (d['decision_reason'] or '').lower(), d['decision_reason']
+" 2>/dev/null; then
+        pass "zip-slip archive rejected, run recorded as ERROR (never a pass)"
+    else
+        fail "zip-slip rejection" "$SLIP_JSON"
+    fi
+else
+    fail "upload endpoint" "$UPLOAD_OUT"
+fi
+
+# --------------------------------------------------------------------------------------
+section "5.2-5.4  Policy is data; severity distribution is available for tuning"
+# --------------------------------------------------------------------------------------
+STATS_OUT=$(curl -sf --max-time 20 "$BACKEND/api/stats/severity" 2>&1)
+if echo "$STATS_OUT" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+assert 'by_severity' in d and 'by_analyzer' in d, d
+assert d['total_findings'] > 0, 'no findings recorded, so tuning has no evidence to work from'
+print('  findings so far:', d['total_findings'], d['by_severity'])
+" 2>&1 | tee /tmp/e2e-stats.txt | grep -q "findings so far"; then
+    pass "severity distribution endpoint reports real findings for hand-tuning"
+    sed -n '1p' /tmp/e2e-stats.txt
+else
+    fail "severity stats" "$STATS_OUT"
+fi
+
+PUB_OUT=$(curl -sf --max-time 20 "$BACKEND/api/published-scores" 2>&1)
+if echo "$PUB_OUT" | python3 -c "import json,sys; json.load(sys.stdin)" 2>/dev/null; then
+    pass "published-score catalog readable (harvest-before-compute path available)"
+else
+    fail "published scores endpoint" "$PUB_OUT"
+fi
+
+# Saving an out-of-range score must be refused: a percentage entered as a rate would
+# silently disable a gate.
+BAD_SAVE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 -X POST "$BACKEND/api/published-scores" \
+    -H 'Content-Type: application/json' \
+    -d '{"model":"x","check_id":"cyse4_mitre","metric":"accuracy","value":90,"source_url":"https://example.com"}' 2>&1)
+if [ "$BAD_SAVE" = "400" ]; then
+    pass "published score outside 0-1 is rejected (unit-mistake guard)"
+else
+    fail "published score validation" "expected HTTP 400, got $BAD_SAVE"
 fi
 
 # --------------------------------------------------------------------------------------

@@ -21,6 +21,10 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY app ./app
 COPY policy ./policy
 COPY catalog ./catalog
+# Deliberately-malicious fixtures used by the acceptance suite to prove the scanners detect
+# what they claim to. Never executed — the scanners read source. They ship in the image so a
+# deployment can verify its own detection without network access to a sample repo.
+COPY tests/fixtures ./fixtures
 
 ENV PATH="/srv/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \

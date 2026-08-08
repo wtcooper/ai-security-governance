@@ -295,6 +295,25 @@ When the distribution shows that `block_on` is discriminating rather than firing
 everything, change `mode: advisory` to `mode: gating` for that asset class. That single line
 is the whole change.
 
+**There is a better route than waiting for submissions to accumulate.** Both Cisco scanner
+repos ship labelled eval corpora — in the GitHub repos, not the PyPI packages, which is why
+they are not vendored here:
+
+| Corpus | Contents | What it yields |
+|---|---|---|
+| [`mcp-scanner/evals`](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/evals) | 141 synthetic malicious MCP servers across 14 threat categories, ground-truth labelled | detection rate and miss rate — **recall only**, there is no benign baseline |
+| [`skill-scanner/evals`](https://github.com/cisco-ai-defense/skill-scanner/tree/main/evals) | labelled skills including `expected_safe: true` cases, plus ~119 real-world skills | precision, recall, F1 **and false-positive rate** |
+
+The skill corpus gives the false-positive baseline that advisory mode is waiting for, so
+skills can graduate to `gating` on evidence. The MCP corpus tells you what the scanner
+catches but not how often it cries wolf, so MCP needs benign servers added — a set of
+well-known public servers scanned and reviewed once would do it.
+
+```bash
+git clone --depth 1 https://github.com/cisco-ai-defense/skill-scanner /tmp/ss
+cd /tmp/ss && uv run python evals/runners/benchmark_runner.py --output results.json
+```
+
 Bear in mind `mcp-scanner` has no CRITICAL severity — HIGH is the top of its scale, so HIGH is
 what actually blocks there. `skill-scanner` does emit CRITICAL.
 
@@ -313,10 +332,13 @@ extracted by a model reading prose could auto-approve a model that was never mea
 ### Known limitations, stated plainly
 
 - **Thresholds are uncalibrated placeholders.** See above.
-- **MCP/skill scans are slow.** The behavioral analyzer runs a model per source file. A
-  monorepo is capped at 40 files and the shortfall is reported as a finding — a scan that
-  silently covered part of a tree reads exactly like a scan that found nothing. Submit the
-  individual server directory rather than a monorepo.
+- **Scan time scales with file count, not with the tool.** Measured: a single-server
+  submission (1 tool, 1 source file) scans in **41 seconds** including dependency audit —
+  which is the normal case, since people upload one server. A monorepo is what is slow,
+  because the behavioral analyzer invokes a model per source file. Monorepos are capped at 40
+  files with the shortfall reported as a finding, since a scan that silently covered part of a
+  tree reads exactly like one that found nothing. Submit the individual server, not a
+  monorepo.
 - **Tools are not enumerated live.** Getting a server's real tool list means launching it,
   which is executing untrusted code. Detection therefore comes from source analysis and
   cannot see tools generated at runtime.

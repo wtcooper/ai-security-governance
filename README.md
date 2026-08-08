@@ -323,6 +323,10 @@ extracted by a model reading prose could auto-approve a model that was never mea
 - **Dependency audit covers pinned packages only.** pip-audit's resolution venv aborts on
   some hosts, and when it fails the scanner reports "SAFE (0 findings)". We detect that and
   record it as a finding instead, running the audit with `--no-deps --disable-pip`.
+- **No local weight-scanner fallback.** Open-weight supply-chain results are harvested from
+  the Hub only. A gated, private, or unscanned repo is reported as unassessed rather than
+  scanned locally — wiring in `modelaudit` (Promptfoo, widest format coverage) is the natural
+  next step, and would mean downloading weights.
 - **No Docker eval tier.** `cyse2_interpreter_abuse`, `cyse2_vulnerability_exploit`,
   `cybench`, `cve_bench` and AgentDojo's sandbox suites need Docker-in-Docker. The five
   shipped benchmarks are all pure-API by design.

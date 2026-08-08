@@ -58,9 +58,10 @@ export default async function LeaderboardPage({
 
       {active !== "llm" && (
         <p className="rounded border border-warn/40 bg-warn/10 px-4 py-3 text-sm text-warn">
-          {active === "mcp" ? "MCP server" : "Agent skill"} evaluation is not implemented yet.
-          When it is, results here are gated on a severity rule rather than a score, and start
-          in advisory mode.
+          {active === "mcp" ? "MCP servers" : "Agent skills"} are gated on a severity rule
+          rather than a score, and run in <strong>advisory mode</strong>: nothing here is
+          auto-approved, because the rule has no false-positive baseline yet. The score column
+          is a severity roll-up for ordering only.
         </p>
       )}
 

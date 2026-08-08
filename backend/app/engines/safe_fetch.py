@@ -60,24 +60,45 @@ def validate_url(url: str) -> str:
         raise UnsafeUrlError("URL has no host")
 
     for address in _addresses_for(host):
-        if (
-            address.is_private
-            or address.is_loopback
-            or address.is_link_local
-            or address.is_reserved
-            or address.is_multicast
-            or address.is_unspecified
-        ):
-            raise UnsafeUrlError(
-                f"host {host!r} resolves to {address}, which is a private, loopback, or "
-                "link-local address. Refusing so this endpoint cannot be used to reach "
-                "internal services or cloud instance metadata."
-            )
+        _require_public(host, address)
     return url
 
 
+# Ranges that are routable enough for `is_global` to allow but that we still refuse.
+# 192.88.99.0/24 is the deprecated 6to4 relay anycast prefix and reports is_global=True.
+EXTRA_DENY = (
+    ipaddress.ip_network("192.88.99.0/24"),
+    ipaddress.ip_network("2002::/16"),
+)
+
+
+def _require_public(host: str, address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> None:
+    """Refuse anything not globally routable.
+
+    `is_global` rather than a hand-rolled list of predicates: an earlier version checked
+    is_private/is_loopback/is_link_local/is_reserved/is_multicast/is_unspecified, which let
+    100.64.0.0/10 (CGNAT) through because none of those are true of it. `is_global` is the
+    property actually wanted, and it covers future non-routable assignments too.
+
+    EXTRA_DENY then handles the cases `is_global` still allows.
+    """
+    if not address.is_global or any(address in network for network in EXTRA_DENY):
+        raise UnsafeUrlError(
+            f"host {host!r} resolves to {address}, which is not a globally routable address. "
+            "Refusing so this endpoint cannot be used to reach internal services, link-local "
+            "metadata endpoints, or carrier-grade NAT space."
+        )
+
+
 async def fetch_text(url: str, timeout: float = 60.0) -> str:
-    """Fetch a validated URL, re-validating each redirect hop by hand."""
+    """Fetch a validated URL, pinning the address and re-validating each redirect hop.
+
+    Validation and connection must use the SAME address. An earlier version validated the
+    hostname and then handed the URL string to httpx, which resolved it again — two lookups,
+    so a name whose records changed in between (DNS rebinding, TTL 0) was fetched without ever
+    having been checked. Now the validated address is connected to directly, with `Host` and
+    SNI preserved so TLS and virtual hosting still work.
+    """
     current = validate_url(url)
 
     async with httpx.AsyncClient(
@@ -87,8 +108,12 @@ async def fetch_text(url: str, timeout: float = 60.0) -> str:
         follow_redirects=False,
     ) as client:
         for _ in range(MAX_REDIRECTS + 1):
+            pinned, host = _pin_to_validated_address(current)
             response = await client.get(
-                current, headers={"User-Agent": "ai-security-governance"}
+                pinned,
+                headers={"User-Agent": "ai-security-governance", "Host": host},
+                # Without this, TLS would be negotiated against the bare IP and fail.
+                extensions={"sni_hostname": host},
             )
             if response.is_redirect:
                 location = response.headers.get("location")
@@ -100,3 +125,18 @@ async def fetch_text(url: str, timeout: float = 60.0) -> str:
             return response.text[:MAX_BYTES]
 
     raise UnsafeUrlError(f"more than {MAX_REDIRECTS} redirects")
+
+
+def _pin_to_validated_address(url: str) -> tuple[str, str]:
+    """Rewrite a URL to connect to a freshly validated address, returning (url, host).
+
+    Resolving here and connecting to the literal address is what closes the gap between the
+    check and the connection. The original hostname is returned so the caller can restore it
+    as the Host header and SNI name.
+    """
+    parsed = httpx.URL(url)
+    host = parsed.host
+    address = _addresses_for(host)[0]
+    _require_public(host, address)
+    literal = f"[{address}]" if address.version == 6 else str(address)
+    return str(parsed.copy_with(host=literal)), host

@@ -117,10 +117,15 @@ def test_rejects_url_without_a_host():
         "https://172.16.0.1/",
         "https://[::1]/",
         "https://0.0.0.0/",
+        # Added after the security review: carrier-grade NAT was allowed by the original
+        # predicate list because none of is_private/is_loopback/is_link_local are true of it.
+        "https://100.64.0.1/",
+        # Deprecated 6to4 relay anycast; ipaddress reports is_global=True for this.
+        "https://192.88.99.1/",
     ],
 )
 def test_rejects_internal_and_metadata_addresses(url):
-    with pytest.raises(UnsafeUrlError, match="private, loopback, or"):
+    with pytest.raises(UnsafeUrlError, match="not a globally routable"):
         validate_url(url)
 
 

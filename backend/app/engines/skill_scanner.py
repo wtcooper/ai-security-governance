@@ -68,7 +68,13 @@ class SkillScanResult:
 
 def scanner_env(settings: Settings) -> dict[str, str]:
     """skill-scanner is LiteLLM-backed, so it takes the same gateway pair."""
-    env = dict(os.environ)
+    # Scrubbed the same way the eval child is. The scanners only ever need the gateway pair,
+    # so passing the whole environment gave them provider credentials they have no use for.
+    # Not known to be exploitable — the backend container is not given provider keys — but the
+    # asymmetry with inspect_child was the kind of inconsistency that becomes a leak later.
+    from app.engines.inspect_child import scrub_provider_credentials
+
+    env = scrub_provider_credentials(dict(os.environ))
     env["SKILL_SCANNER_LLM_API_KEY"] = settings.gateway_api_key
     env["SKILL_SCANNER_LLM_BASE_URL"] = settings.gateway_base_url
     env["SKILL_SCANNER_LLM_MODEL"] = f"openai/{settings.scanner_model}"

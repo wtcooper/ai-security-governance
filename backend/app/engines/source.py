@@ -79,6 +79,12 @@ async def clone_repo(url: str, destination: Path, timeout: float = 300.0) -> Acq
         "git",
         "-c",
         "core.hooksPath=/dev/null",  # a cloned repo must never execute its own hooks
+        "-c",
+        # Without this, git checks out mode-120000 entries as real symlinks, and a later
+        # staging copy would dereference them — pulling content from outside the scan root
+        # into it. With it, git writes the link target as a plain text file instead. The zip
+        # path already refuses symlink members; this makes the clone path consistent.
+        "core.symlinks=false",
         "clone",
         "--depth",
         "1",

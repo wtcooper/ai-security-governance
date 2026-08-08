@@ -90,7 +90,13 @@ def scanner_env(settings: Settings) -> dict[str, str]:
     `openai/<alias>` tells LiteLLM to use its OpenAI-compatible client against our base URL,
     which is how a local model ends up doing the analysis for free.
     """
-    env = dict(os.environ)
+    # Scrubbed the same way the eval child is. The scanners only ever need the gateway pair,
+    # so passing the whole environment gave them provider credentials they have no use for.
+    # Not known to be exploitable — the backend container is not given provider keys — but the
+    # asymmetry with inspect_child was the kind of inconsistency that becomes a leak later.
+    from app.engines.inspect_child import scrub_provider_credentials
+
+    env = scrub_provider_credentials(dict(os.environ))
     env["MCP_SCANNER_LLM_API_KEY"] = settings.gateway_api_key
     env["MCP_SCANNER_LLM_BASE_URL"] = settings.gateway_base_url
     env["MCP_SCANNER_LLM_MODEL"] = f"openai/{settings.scanner_model}"
@@ -307,11 +313,26 @@ SKIP_DIRS = {".git", "node_modules", "venv", ".venv", "dist", "build", "__pycach
 
 
 def _source_files(root: Path) -> list[Path]:
+    """Source files inside the scan root, excluding anything that points outside it.
+
+    `is_file()` follows symlinks and `suffix` comes from the link name, so without the
+    symlink checks a submission containing `a.py -> /etc/passwd` would have that file read as
+    if it were part of the submission.
+    """
     files: list[Path] = []
+    resolved_root = root.resolve()
     for path in sorted(root.rglob("*")):
+        # Checked before is_file(), which would follow the link and report the target's type.
+        if path.is_symlink():
+            continue
         if not path.is_file() or path.suffix.lower() not in SOURCE_SUFFIXES:
             continue
         if SKIP_DIRS & set(path.relative_to(root).parts):
+            continue
+        # Belt and braces: a symlinked *parent* directory would not be caught above.
+        try:
+            path.resolve().relative_to(resolved_root)
+        except ValueError:
             continue
         files.append(path)
     return files
@@ -336,13 +357,18 @@ def _bounded_target(root: Path, cap: int) -> tuple[Path, int]:
     for path in files[:cap]:
         destination = staged / path.relative_to(root)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(path, destination)
+        # follow_symlinks=False matters: the default copies the TARGET's bytes, which would
+        # materialise content from outside the scan root as an ordinary file inside a fresh
+        # root — laundering it past the vendor scanner's own symlink guard.
+        shutil.copy2(path, destination, follow_symlinks=False)
     # Manifests are small and needed by the dependency analyzer.
     for manifest in ("requirements.txt", "pyproject.toml", "package.json"):
         for match in sorted(root.rglob(manifest))[:1]:
+            if match.is_symlink():
+                continue
             destination = staged / match.relative_to(root)
             destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(match, destination)
+            shutil.copy2(match, destination, follow_symlinks=False)
     return staged, len(files) - cap
 
 
@@ -358,8 +384,20 @@ def _pip_audit_failed(output: str) -> bool:
 
 
 def _find_requirements(source_path: Path) -> Path | None:
+    """A manifest inside the tree, never a symlink to one outside it.
+
+    pip-audit reads the path it is given, so a symlinked manifest would have it read an
+    arbitrary host file.
+    """
+    resolved_root = source_path.resolve()
     for candidate in ("requirements.txt", "pyproject.toml"):
         for match in sorted(source_path.rglob(candidate)):
+            if match.is_symlink():
+                continue
+            try:
+                match.resolve().relative_to(resolved_root)
+            except ValueError:
+                continue
             return match
     return None
 

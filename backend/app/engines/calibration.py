@@ -286,9 +286,15 @@ async def run_calibration(
         all_cases = all_cases[:limit]
     report.sampling["cases_run"] = len(all_cases)
 
-    for corpus, category, name, path, malicious in all_cases:
-        report.cases.append(
-            await _scan_case(settings, corpus, category, name, path, malicious, workspace)
+    # Progress is printed per case rather than only at the end: a sweep over a local model
+    # takes a long time, and a silent run gives no way to tell slow from stuck.
+    for index, (corpus, category, name, path, malicious) in enumerate(all_cases, start=1):
+        result = await _scan_case(settings, corpus, category, name, path, malicious, workspace)
+        report.cases.append(result)
+        print(
+            f"[{index}/{len(all_cases)}] {corpus}/{category}/{name}: "
+            f"{result.outcome} ({result.finding_count} findings)",
+            flush=True,
         )
 
     return report

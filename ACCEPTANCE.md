@@ -90,6 +90,36 @@ scripts/e2e.sh --keep-up    # leave the stack running afterwards
 | 4.3 | The scanner's own `is_safe` verdict is honoured rather than re-derived | real run assertion |
 | 4.4 | Advisory mode never returns `AUTO_APPROVE` | real run against a benign skill |
 
+## Phase 6 — Detection calibration against the vendor corpora
+
+Run with `scripts/calibrate.sh`. Measures **our whole path** (invocation → parsing → severity
+mapping → policy gate) against the labelled corpora the Cisco repos ship. We are not grading
+the scanners: a finding a scanner emits and we fail to parse is a miss for governance purposes.
+
+| # | Criterion | How it is verified |
+|---|---|---|
+| 6.1 | Corpora clone and case discovery finds the expected counts | 144 MCP cases (141 malicious + 3 benign), 21 skill cases (17 malicious + 4 benign) |
+| 6.2 | Labels come from the corpus, never inferred | `_expected.json` `expected_safe` plus the safe/malicious directory split |
+| 6.3 | Recall reported per corpus with missed categories named | report `summary()` lists `per_category_misses` |
+| 6.4 | FP rate reported **with its denominator** and flagged when thin | `fp_denominator_warning` set below 20 benign cases |
+| 6.5 | `advisory_mode` excluded from blocking reasons | unit test — otherwise recall would measure the mode, not detection |
+| 6.6 | Sampling is recorded, never silent | `sampling.cases_run` and a note that sampled recall is an estimate |
+
+**Known limit:** FP denominators are 3 benign MCP servers and 4 safe skills. Enough to catch a
+rule that fires on everything; not enough to justify auto-approval. MCP still needs benign
+servers added before `gating`.
+
+## Phase 7 — Frontend visual design
+
+| # | Criterion | How it is verified |
+|---|---|---|
+| 7.1 | Light theme throughout, no dark-on-dark, no `prefers-color-scheme` reliance | rendered page inspection |
+| 7.2 | Icons from `lucide-react`; no bespoke SVG paths in components | grep for `<path` / `<svg` in `app/**` |
+| 7.3 | One consistent icon per asset class, decision state, and severity | shared maps, asserted by inspection |
+| 7.4 | Decision, gate table and severity stay the highest-contrast elements | rendered page inspection |
+| 7.5 | Colour is never the sole carrier of meaning — text labels accompany icons | rendered page inspection |
+| 7.6 | `npm run build` clean and criteria 0.11 / 1.9 still pass | e2e suite |
+
 ## Phase 5 — Calibration and docs
 
 | # | Criterion | How it is verified |

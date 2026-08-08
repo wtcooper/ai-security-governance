@@ -490,7 +490,7 @@ Colima; `compose.yaml` with `gateway` + `backend` + `frontend` (+ optional `olla
 - **Default judge is `qwen35` (local), not `gpt-5.6-luna`** — testing must cost nothing.
   `gpt-5.6-luna` additionally returns "no credits remaining" on the current OpenAI account.
 
-**Phase 1 — LLM path end to end.**
+**Phase 1 — LLM path end to end. ✅ COMPLETE (commit `eee3bc7`)**
 Check registry with judge-arg mapping, `inspect_child.py` with env scrubbing, harvest
 (catalog + HF `model-index`), normalization, gates, LLM leaderboard, run detail page.
 Includes the judge-integrity handling above.
@@ -511,7 +511,7 @@ Note the judge is a **local** model throughout, which also sidesteps the hosted-
 squeamishness risk: a local grader is far less likely to refuse cyber content than a
 frontier model with strict safety post-training. The fallback ladder still exists in config.
 
-**Phase 2 — Model weight scan.**
+**Phase 2 — Model weight scan. ✅ COMPLETE (commit `eee3bc7`)**
 `harvest_hf.py` over `/tree?expand=true&recursive=true`; per-file scanner table on the run
 page; `scansDone:false` → flag + opt-in `modelaudit`.
 *Acceptance criteria 2.1–2.4:*
@@ -522,7 +522,7 @@ page; `scansDone:false` → flag + opt-in `modelaudit`.
 | 2.3 | Any file with `status: unsafe` blocks |
 | 2.4 | Raw scan JSON stored as a run artifact |
 
-**Phase 3 — MCP path.**
+**Phase 3 — MCP path. ✅ COMPLETE (commit `bce2c14`)**
 `source.py` (clone/zip), `mcp_scanner.py` running the **full analyzer set** as one
 `mcp.full_scan` check, findings ingest (analyzer + severity + rule_id preserved),
 severity-rule gate in advisory mode, severity roll-up for ordering, MCP leaderboard.
@@ -537,7 +537,7 @@ severity-rule gate in advisory mode, severity roll-up for ordering, MCP leaderbo
 | 3.6 | Untrusted code never executed: default path is static/behavioral only, no `stdio`/`remote` launch |
 | 3.7 | Zip upload rejects path traversal (zip-slip) and oversize archives |
 
-**Phase 4 — Skills path.**
+**Phase 4 — Skills path. ✅ COMPLETE (commit `bce2c14`)**
 `skill_scanner.py` (`--use-behavioral --use-llm --enable-meta --format sarif`) as one
 `skill.full_scan` check, SARIF ingest, `is_safe` verdict honoured, skills leaderboard.
 *Acceptance criteria 4.1–4.4:*
@@ -548,7 +548,7 @@ severity-rule gate in advisory mode, severity roll-up for ordering, MCP leaderbo
 | 4.3 | The scanner's own `is_safe` verdict is honoured rather than re-derived |
 | 4.4 | Advisory mode never returns `AUTO_APPROVE` |
 
-**Phase 5 — Calibration mechanism + docs.**
+**Phase 5 — Calibration mechanism + docs. ✅ COMPLETE (commit `bce2c14`)**
 Published-score ingestion (paste a system-card URL → LLM extracts candidates → user confirms
 before save); `GET /api/stats/severity` distribution view for hand-tuning MCP/skill
 `block_on`; README covering Colima, compose, gateway config, swapping SQLite for Postgres,
@@ -567,6 +567,81 @@ Documented as future work, not built: the Docker eval tier (`cyse2_interpreter_a
 `cyse2_vulnerability_exploit`, `cybench`, `cve_bench`, AgentDojo sandbox suites) and
 scanner-detection benchmarking against a labeled corpus, should you ever want to compare
 Cisco's scanners against alternatives.
+
+**Phase 6 — Detection calibration against the vendor corpora. ✅ COMPLETE**
+
+Closes the gap Phase 5 could only document. Both Cisco scanner repos ship labelled eval
+corpora; they live in the **GitHub repos, not the PyPI packages**, which is why they were
+missed initially. They are cloned on demand rather than vendored — a vendored third-party
+corpus goes stale silently, and staleness in a calibration baseline is worse than absence.
+
+| Corpus | Malicious | Benign | What it yields |
+|---|---|---|---|
+| `mcp-scanner/evals/behavioral-analysis/data` | **141** servers, 14 threat categories | — | recall |
+| `mcp-scanner/evals/remote/benign` | — | 3 servers | thin FP sample |
+| `skill-scanner/evals/skills` (`_expected.json`) | 10 | 2 | recall + FP |
+| `skill-scanner/evals/test_skills` | 7 | 2 | recall + FP |
+
+`app/engines/calibration.py` runs **our** pipeline over them — our invocation, our parsing,
+our severity mapping, our policy gate — not the vendors' runners. We are not grading the
+scanners; a finding a scanner emits and we then fail to parse is, for governance purposes, a
+miss. Run with `scripts/calibrate.sh`.
+
+Two design points that matter for honesty:
+- **Advisory mode is excluded from "blocked".** Advisory never approves, so counting it as a
+  detection would score 100% recall on an empty scanner. Only real blocking reasons count.
+- **Sampling is recorded, never silent.** The malicious MCP set is sampled one-per-category by
+  default (the behavioral analyzer invokes a model per file; all 141 takes over an hour on a
+  local model). The sample size and a note that sampled recall is an estimate go into the
+  report. `--full` runs the whole corpus.
+
+*Acceptance criteria 6.1–6.5:*
+| # | Criterion |
+|---|---|
+| 6.1 | Corpora clone and case discovery finds the expected counts (144 MCP incl. 3 benign; 21 skills incl. 4 benign) |
+| 6.2 | Labels are read from the corpus, not inferred — `_expected.json` `expected_safe` plus the safe/malicious directory split |
+| 6.3 | Recall reported per corpus, with missed threat categories named |
+| 6.4 | FP rate reported **with its denominator**, and flagged as indicative below 20 benign cases |
+| 6.5 | `advisory_mode` is excluded from blocking reasons, so recall measures detection rather than the mode |
+
+**What calibration still cannot settle:** the FP denominators are 3 benign MCP servers and 4
+safe skills. That is enough to catch a rule that fires on everything, not enough to justify an
+auto-approval. Graduating MCP from `advisory` to `gating` still needs benign servers added —
+a set of well-known public servers, scanned and reviewed once, would do it.
+
+**Phase 7 — Frontend visual design.**
+
+The UI is currently unstyled beyond layout: functional, but it does not read as a tool you
+would trust with an approval decision. This phase gives it a considered visual identity.
+
+*Direction:* minimalist, hardened, quiet. The reference points are Linear and Vercel's
+dashboards rather than a traditional security console — no gauges, no gradients, no animated
+"threat" theatre. A governance tool earns trust by looking precise, and by putting the decision
+and the evidence where the eye lands first. Visual weight is spent on exactly three things: the
+decision, the gate table, and severity.
+
+*Decisions taken:*
+- **Light theme only.** Read from "No dark mode". Every colour is already a CSS custom property
+  on `:root`, so this is a token swap rather than a rewrite — and cheap to invert if the intent
+  was "don't add a dark-mode toggle" instead.
+- **[Lucide](https://lucide.dev) for icons** via `lucide-react`. Well-known, MIT, ~1500 icons,
+  tree-shaken per import. No hand-drawn SVGs. It carries the security vocabulary this app needs
+  (`ShieldCheck`, `ScanSearch`, `FileSearch`, `Bug`, `TriangleAlert`, `BadgeCheck`, `Boxes`,
+  `CircleSlash`) so icons stay literal rather than decorative.
+- **Icons are semantic, never ornamental.** One per asset class, one per decision state, one per
+  severity. If an icon does not disambiguate something, it does not ship.
+- **No new runtime dependency beyond `lucide-react`.** No component library, no animation
+  library, no charting.
+
+*Acceptance criteria 7.1–7.6:*
+| # | Criterion |
+|---|---|
+| 7.1 | Light theme throughout; no element renders dark-on-dark or relies on `prefers-color-scheme` |
+| 7.2 | Icons come from `lucide-react`; no bespoke SVG paths in components |
+| 7.3 | Every asset class, decision state, and severity has one consistent icon used everywhere it appears |
+| 7.4 | Decision, gate table, and severity remain the highest-contrast elements on their pages |
+| 7.5 | Colour is never the only carrier of meaning — decisions and severities keep a text label beside the icon |
+| 7.6 | `npm run build` clean; existing acceptance criteria 0.11 and 1.9 (page content) still pass |
 
 ---
 

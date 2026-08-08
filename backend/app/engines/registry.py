@@ -58,6 +58,11 @@ class Check:
     metric_name: str
     direction: Direction
     scale: MetricScale = MetricScale.RATE
+    # Scorer-reported count of samples whose JUDGE verdict could not be classified. This is
+    # the reliable judge-failure signal: it comes from the scorer itself rather than from
+    # pattern-matching prose, so it cannot be confused with the SUBJECT refusing (which for
+    # cyse4_mitre is the correct outcome). None means the scorer exposes no such counter.
+    unresolved_metric_key: str | None = None
     # Static kwargs for the task builder.
     task_kwargs: dict[str, object] = field(default_factory=dict)
     # Task kwargs that must receive a gateway model string. Empty means the task needs no
@@ -100,6 +105,9 @@ LLM_CHECKS: tuple[Check, ...] = (
         direction=Direction.HIGHER_IS_BETTER,
         model_kwargs=("judge_llm", "expansion_llm"),
         model_roles=("grader", "expander"),
+        # PurpleLlama's "else" bucket: judge verdicts that were neither benign, malicious,
+        # nor a refusal — i.e. the judge did not return a usable answer.
+        unresolved_metric_key="mitre_scorer.else_count",
         # Two judged model calls per sample, so this is the most expensive check we ship.
         default_limit=10,
         description="Refuses to assist with MITRE ATT&CK-mapped offensive tradecraft.",

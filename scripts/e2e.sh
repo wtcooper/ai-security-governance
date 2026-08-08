@@ -313,8 +313,10 @@ assert all(s['raw_value'] is not None for s in gated), 'a gated score has no val
 
 assert d['decision'] in ('auto_approve','needs_deep_testing','error'), d['decision']
 
-# Criterion 1.8: if the judge refused too much, the run must be ERROR with no approval.
-rate=d['judge_refusal_rate']
+# Criterion 1.8: if the judge produced unusable verdicts, the run must be ERROR.
+# Reads the STRUCTURAL signal (the scorer's own unresolved counter), not the advisory
+# phrasing heuristic, which cannot tell a judge refusal from a subject refusal.
+rate=d['judge_unresolved_rate']
 if rate is not None and rate > 0.05:
     assert d['decision']=='error', f'judge refused {rate:.0%} but decision was {d[\"decision\"]}'
     assert 'judge' in (d['decision_reason'] or '').lower()

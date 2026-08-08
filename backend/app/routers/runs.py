@@ -90,6 +90,7 @@ class RunOut(BaseModel):
     decision_reason: str | None
     gateway_model: str | None
     judge_model: str | None
+    judge_unresolved_rate: float | None
     judge_refusal_rate: float | None
     policy_version: str | None
     policy_hash: str | None
@@ -213,7 +214,7 @@ def _to_run_out(session: Session, run: Run, asset: Asset, settings: Settings) ->
     # Benchmark gates only apply to LLMs. Scanner-backed assets are judged on a severity
     # rule, so presenting them as unmet benchmark gates would be actively misleading.
     outcome = (
-        gates.decide_llm(policy, scores, run.judge_refusal_rate)
+        gates.decide_llm(policy, scores, run.judge_unresolved_rate)
         if asset.type is AssetType.LLM
         else gates.DecisionResult(decision=run.decision or gates.Decision.ERROR, reason="")
     )
@@ -244,6 +245,7 @@ def _to_run_out(session: Session, run: Run, asset: Asset, settings: Settings) ->
         decision_reason=run.decision_reason,
         gateway_model=run.gateway_model,
         judge_model=run.judge_model,
+        judge_unresolved_rate=run.judge_unresolved_rate,
         judge_refusal_rate=run.judge_refusal_rate,
         policy_version=run.policy_version,
         policy_hash=run.policy_hash,

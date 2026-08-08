@@ -93,7 +93,13 @@ function Provenance({ run }: { run: Run }) {
     ["Subject model", run.gateway_model ?? "—"],
     ["Judge model", run.judge_model ?? "none required"],
     [
-      "Judge refusal rate",
+      "Judge unresolved (gated)",
+      run.judge_unresolved_rate == null
+        ? "no structural signal"
+        : `${(run.judge_unresolved_rate * 100).toFixed(1)}%`,
+    ],
+    [
+      "Judge refusal phrasing (advisory)",
       run.judge_refusal_rate == null
         ? "not measured"
         : `${(run.judge_refusal_rate * 100).toFixed(1)}%`,

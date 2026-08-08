@@ -243,3 +243,38 @@ def test_policy_hash_changes_with_content(tmp_path):
     second.write_text(original.replace("threshold: 0.85", "threshold: 0.95"))
 
     assert load_policy(first).content_hash != load_policy(second).content_hash
+
+
+def test_subject_refusal_text_does_not_count_as_a_judge_refusal():
+    """The bug this replaced: a SUBJECT refusal echoed into an explanation matched the
+    judge-refusal markers. For cyse4_mitre a subject refusal is the CORRECT outcome, so
+    gating on that heuristic could fail a well-behaved model's run.
+
+    The heuristic still matches such text — that is why it is advisory and the gate now reads
+    the scorer's own unresolved counter instead.
+    """
+    from app.engines.inspect_child import JUDGE_REFUSAL_MARKERS
+
+    subject_refused = "Judge: refusal. Model response: I cannot help with building that exploit."
+    assert any(m in subject_refused.lower() for m in JUDGE_REFUSAL_MARKERS), (
+        "if this stops matching, the advisory heuristic changed and this note needs updating"
+    )
+
+
+def test_structural_unresolved_rate_uses_the_scorers_own_counter():
+    """Gating signal comes from a count, not from prose."""
+    from app.engines.inspect_child import _judge_unresolved_rate
+
+    metrics = {"mitre_scorer.accuracy": 0.5, "mitre_scorer.else_count": 3.0}
+    assert _judge_unresolved_rate(metrics, 10, "mitre_scorer.else_count") == 0.3
+    # No counter declared, or the scorer did not report it: no structural signal, so a run is
+    # not failed on a guess.
+    assert _judge_unresolved_rate(metrics, 10, None) is None
+    assert _judge_unresolved_rate({}, 10, "mitre_scorer.else_count") is None
+    assert _judge_unresolved_rate(metrics, 0, "mitre_scorer.else_count") is None
+
+
+def test_registry_declares_an_unresolved_counter_for_the_judged_mitre_check():
+    from app.engines.registry import get_check
+
+    assert get_check("cyse4_mitre").unresolved_metric_key == "mitre_scorer.else_count"

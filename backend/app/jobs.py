@@ -111,7 +111,8 @@ async def _run_llm_checks(
     if only_checks:
         wanted = set(only_checks)
         checks = tuple(check for check in checks if check.id in wanted)
-    refusal_rates: list[float] = []
+    unresolved_rates: list[float] = []
+    heuristic_rates: list[float] = []
 
     for check in checks:
         # Harvest first: a published number costs nothing to reuse.
@@ -125,7 +126,14 @@ async def _run_llm_checks(
             continue
 
         await _run_single_check(
-            settings, run_id, check, subject_alias, judge_alias, limit_override, refusal_rates
+            settings,
+            run_id,
+            check,
+            subject_alias,
+            judge_alias,
+            limit_override,
+            unresolved_rates,
+            heuristic_rates,
         )
 
     # Open-weight models additionally get a supply-chain scan. Harvested from the Hub rather
@@ -135,10 +143,13 @@ async def _run_llm_checks(
     if hf_repo_id:
         weights_outcome = await _harvest_weight_scan(settings, run_id, hf_repo_id)
 
-    # A judge that would not grade makes the whole run unusable, so the rate is aggregated
-    # across checks rather than judged per check.
-    overall_refusal = max(refusal_rates) if refusal_rates else None
-    _finalize_run(run_id, policy, overall_refusal, weights_outcome)
+    # A judge that would not grade makes the whole run unusable, so the worst rate across
+    # checks decides rather than an average that would dilute one bad check.
+    overall_unresolved = max(unresolved_rates) if unresolved_rates else None
+    overall_heuristic = max(heuristic_rates) if heuristic_rates else None
+    _finalize_run(
+        run_id, policy, overall_unresolved, weights_outcome, heuristic=overall_heuristic
+    )
 
 
 async def _run_scanner_checks(settings: Settings, run_id: int, asset_type: AssetType) -> None:
@@ -379,7 +390,8 @@ async def _run_single_check(
     subject_alias: str,
     judge_alias: str,
     limit_override: int | None,
-    refusal_rates: list[float],
+    unresolved_rates: list[float],
+    heuristic_rates: list[float],
 ) -> None:
     result = await inspect_runner.run_eval(
         settings,
@@ -392,9 +404,13 @@ async def _run_single_check(
     payload = result.payload
     metrics: dict[str, float] = payload.get("metrics") or {}
 
-    refusal_rate = payload.get("judge_refusal_rate")
-    if isinstance(refusal_rate, (int, float)):
-        refusal_rates.append(float(refusal_rate))
+    # Gate on the structural signal only. The phrasing heuristic is recorded separately.
+    unresolved = payload.get("judge_unresolved_rate")
+    if isinstance(unresolved, (int, float)):
+        unresolved_rates.append(float(unresolved))
+    heuristic = payload.get("judge_refusal_rate_heuristic")
+    if isinstance(heuristic, (int, float)):
+        heuristic_rates.append(float(heuristic))
 
     gate = get_policy(settings.policy_path).llm_gates.get(check.id)
     raw_reported = metrics.get(check.metric_key)
@@ -455,8 +471,9 @@ async def _run_single_check(
 def _finalize_run(
     run_id: int,
     policy,
-    judge_refusal_rate: float | None,
+    judge_unresolved_rate: float | None,
     weights_outcome: gates.DecisionResult | None = None,
+    heuristic: float | None = None,
 ) -> None:
     with session_scope() as session:
         run = session.get(Run, run_id)
@@ -464,7 +481,7 @@ def _finalize_run(
             return
         scores = list(session.exec(select(Score).where(Score.run_id == run_id)))
 
-        outcome = gates.decide_llm(policy, scores, judge_refusal_rate)
+        outcome = gates.decide_llm(policy, scores, judge_unresolved_rate)
 
         # Benchmarks and the supply-chain scan are independent reasons to withhold approval,
         # so the stricter of the two wins. Approval requires both to be satisfied.
@@ -486,7 +503,8 @@ def _finalize_run(
 
         run.decision = outcome.decision
         run.decision_reason = outcome.reason
-        run.judge_refusal_rate = judge_refusal_rate
+        run.judge_unresolved_rate = judge_unresolved_rate
+        run.judge_refusal_rate = heuristic
         run.status = (
             RunStatus.FAILED if outcome.decision is Decision.ERROR else RunStatus.COMPLETE
         )

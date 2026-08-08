@@ -141,12 +141,39 @@ def _build_registry_task(check_id: str, judge_model: str | None):
     return builder(**kwargs)
 
 
-def _judge_refusal_rate(log: Any) -> tuple[float | None, int]:
-    """Fraction of scored samples where the judge declined to grade.
+def _judge_unresolved_rate(
+    metrics: dict[str, float], total_samples: int | None, unresolved_metric_key: str | None
+) -> float | None:
+    """Structural judge-failure rate, taken from the scorer's own unresolved counter.
 
-    Model-graded scorers put the judge's own response in `score.explanation`, which is the
-    only place a refusal is visible: a refusal usually produces a confident-looking INCORRECT
-    rather than an error, so counting errors alone would miss it entirely.
+    This is the signal worth gating on. Inspect's model-graded scorers do keyword matching on
+    the judge's reply, and when the judge returns nothing usable they fall through to a
+    default verdict — which looks identical to a real grade. Scorers that track that
+    fall-through expose a counter for it (cyse4_mitre's `else_count`), and a count is not
+    open to interpretation the way prose is.
+
+    Returns None when the scorer exposes no such counter, in which case there is no reliable
+    structural signal and the run is not failed on a guess.
+    """
+    if not unresolved_metric_key or not total_samples:
+        return None
+    unresolved = metrics.get(unresolved_metric_key)
+    if unresolved is None:
+        return None
+    return round(float(unresolved) / total_samples, 4)
+
+
+def _judge_refusal_rate(log: Any) -> tuple[float | None, int]:
+    """ADVISORY heuristic: judge-refusal phrasing seen in score explanations.
+
+    Reported, never gated on. It cannot distinguish the judge refusing from the SUBJECT
+    refusing, because scorers echo subject text into the explanation — and for cyse4_mitre a
+    subject refusal is the *correct* result, so gating on this would fail a well-behaved
+    model's run. Verified: "Judge: refusal. Model response: I cannot help with building that
+    exploit." matches the marker list.
+
+    Kept because it is genuinely useful context for a human choosing a judge, which is a
+    different job from deciding a run.
     """
     samples = getattr(log, "samples", None)
     if not samples:
@@ -209,6 +236,12 @@ def run(
     total = getattr(log.results, "total_samples", None) if log.results else None
     completed = getattr(log.results, "completed_samples", None) if log.results else None
     refusal_rate, refused_count = _judge_refusal_rate(log)
+    unresolved_metric_key = None
+    if task_name not in BUILTIN_TASKS:
+        from app.engines.registry import get_check
+
+        unresolved_metric_key = get_check(task_name).unresolved_metric_key
+    judge_unresolved_rate = _judge_unresolved_rate(metrics, total, unresolved_metric_key)
 
     return {
         "task": task_name,
@@ -221,9 +254,12 @@ def run(
         # Samples that produced no score at all. Reported so a partially-failed run is
         # visible rather than silently averaged over fewer samples.
         "unresolved_samples": (total - completed) if (total and completed is not None) else None,
-        # Samples the judge declined to grade, detected from the judge's own response text.
-        "judge_refusal_rate": refusal_rate,
-        "judge_refusal_count": refused_count,
+        # STRUCTURAL and gated on: the scorer's own count of unclassifiable judge verdicts.
+        "judge_unresolved_rate": judge_unresolved_rate,
+        # ADVISORY only: phrasing heuristic, cannot separate judge refusal from subject
+        # refusal. Displayed for context; never used to fail a run.
+        "judge_refusal_rate_heuristic": refusal_rate,
+        "judge_refusal_count_heuristic": refused_count,
         "error": str(log.error) if log.error else None,
         "log_path": getattr(log, "location", None),
     }

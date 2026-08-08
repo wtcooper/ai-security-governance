@@ -102,6 +102,10 @@ class Run(SQLModel, table=True):
     # never be mistaken for a real evaluation.
     gateway_model: str | None = None
     judge_model: str | None = None
+    # Gated on: the scorer's own count of unclassifiable judge verdicts, as a rate.
+    judge_unresolved_rate: float | None = None
+    # Advisory only: refusal phrasing seen in explanations. Cannot separate a judge refusal
+    # from a subject refusal, so it informs a human but never fails a run.
     judge_refusal_rate: float | None = None
 
     # Scanner provenance (MCP/skill runs).

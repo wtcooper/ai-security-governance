@@ -1,6 +1,30 @@
 import type { Metadata } from "next";
+import { IBM_Plex_Mono, IBM_Plex_Sans } from "next/font/google";
 import Link from "next/link";
+import { ShieldCheck } from "lucide-react";
 import "./globals.css";
+
+/**
+ * IBM Plex, in two voices from one superfamily.
+ *
+ * Chosen for its engineering heritage rather than its novelty: Plex was designed for technical
+ * documentation and instrumentation, and its slightly squared terminals read as equipment
+ * instead of as a startup landing page. Sans carries the interface; Mono carries every number,
+ * model alias, metric key and hash — which in this app is most of the content.
+ */
+const plexSans = IBM_Plex_Sans({
+  subsets: ["latin"],
+  weight: ["400", "500", "600"],
+  variable: "--font-plex-sans",
+  display: "swap",
+});
+
+const plexMono = IBM_Plex_Mono({
+  subsets: ["latin"],
+  weight: ["400", "500"],
+  variable: "--font-plex-mono",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "AI Security Governance",
@@ -10,24 +34,33 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" className={`${plexSans.variable} ${plexMono.variable}`}>
       <body>
-        <header className="border-b border-edge">
-          <nav className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
-            <Link href="/" className="text-sm font-semibold tracking-tight">
-              AI Security Governance
+        <header className="border-b border-rule bg-surface">
+          <nav className="mx-auto flex max-w-5xl items-center justify-between px-6 py-3.5">
+            <Link href="/" className="flex items-center gap-2 text-ink">
+              <ShieldCheck size={17} strokeWidth={2} aria-hidden="true" />
+              <span className="text-[13px] font-semibold tracking-tight">
+                AI Security Governance
+              </span>
             </Link>
-            <div className="flex gap-6 text-sm text-muted">
-              <Link href="/" className="hover:text-white">
+            <div className="flex items-center gap-5 text-[13px]">
+              <Link href="/" className="text-muted transition-colors hover:text-ink">
                 Evaluate
               </Link>
-              <Link href="/leaderboard" className="hover:text-white">
-                Leaderboards
+              <Link href="/leaderboard" className="text-muted transition-colors hover:text-ink">
+                Results
               </Link>
             </div>
           </nav>
         </header>
         <main className="mx-auto max-w-5xl px-6 py-10">{children}</main>
+        <footer className="mx-auto max-w-5xl px-6 pb-10">
+          <p className="border-t border-rule pt-4 text-[11px] text-faint">
+            Security criteria only. Harmful-content and compliance evaluation are handled
+            separately.
+          </p>
+        </footer>
       </body>
     </html>
   );

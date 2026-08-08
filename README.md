@@ -1,363 +1,237 @@
 # ai-security-governance
 
-Self-service application to manage security-focused evaluations and governance thresholds
-for approved organizational use of AI assets (models, MCP servers, agent skills).
+Self-service security evaluation and governance thresholds for AI assets — foundation models,
+MCP servers, and agent skills.
 
-## What problem this solves
+Submit an asset, get a decision: **auto-approve**, or **needs deep testing**. Every result is
+measured against a written threshold and records which models and which policy produced it.
 
-We have no defined testing bar for onboarding new AI assets, so every new foundation model,
-MCP server, or agent skill gets an ad-hoc judgement call.
+## Why
 
-This is the tool used **after** terms/legal review has already established that an asset
-can't be waved through. Its only job is to answer one security question: *does this asset
-clear our security thresholds (auto-approve), or does it need formal deep testing?*
+Most organisations have no defined testing bar for onboarding AI assets, so every new model,
+MCP server or skill becomes an ad-hoc judgement call. This tool exists to make that call
+repeatable: a fixed set of security benchmarks and scanners, a versioned policy file, and a
+deterministic gate.
 
-Scope is strictly security testing criteria. Harmful-content and toxicity evaluation belong
-to compliance — the separation of duties is deliberate, so nothing here scores for harm.
+It is the tool you use **after** terms and legal review have established that an asset can't
+simply be waved through. Scope is security only — harmful-content and compliance evaluation
+belong to different teams, and the separation is deliberate.
 
-Two rules shape the whole design:
+Two rules shape the design:
 
-1. **Harvest before compute.** If a benchmark result or a model scan is already published,
-   pull it rather than burning our own compute. Every score records its provenance
-   (`published` / `harvested` / `self_run`) and a source URL.
-2. **The gate is deterministic.** Thresholds live in a versioned `policy.yaml`, one gate per
-   benchmark on that benchmark's own headline metric. No LLM decides approval.
+1. **Harvest before compute.** If a benchmark result or a model scan is already published, reuse
+   it. Every score records its provenance (`published` / `harvested` / `self_run`) and a source.
+2. **The gate is deterministic.** Thresholds live in `policy.yaml`, one per benchmark, each with
+   an explicit direction. No model decides an approval.
 
-## Status
-
-**All phases built and verified** against a real stack via `scripts/e2e.sh`, with every
-model call going to local Ollama models so a full acceptance run costs $0.
-
-| Phase | Scope | State |
-|---|---|---|
-| 0 | Compose stack, LiteLLM gateway, preflight, model discovery | ✅ |
-| 1 | LLM path: 5 CyberSecEval-4/AgentDojo gates, judge integrity, leaderboard | ✅ |
-| 2 | Open-weight supply-chain scan (5 Hugging Face scanners) | ✅ |
-| 3 | MCP server path (`mcp-scanner`, full analyzer sweep) | ✅ |
-| 4 | Agent skill path (`skill-scanner`, full analyzer sweep) | ✅ |
-| 5 | Policy-as-data, published-score ingestion, severity stats | ✅ |
-
-**One thing is deliberately not done: the thresholds are not calibrated.** They are
-structurally correct placeholders. Calibrating them requires runs against models whose
-behaviour the org actually cares about, and local models cannot stand in for that. It is one
-funded run away, and it changes `policy.yaml` only — the mechanism is built and tested.
-
-### What each asset class is judged on
+## What it evaluates
 
 | Asset | Evaluation | Gate |
 |---|---|---|
-| Foundation model | 5 CyberSecEval-4 / AgentDojo benchmarks via Inspect AI | one threshold per benchmark, on that benchmark's own headline metric |
-| Open weights | 5 Hugging Face scanners, harvested not recomputed | any file any scanner calls unsafe blocks; "not scanned" ≠ safe |
-| MCP server | full `mcp-scanner` sweep of cloned source | severity rule, **advisory** in v1 |
-| Agent skill | full `skill-scanner` sweep | severity rule + the scanner's own `is_safe`, **advisory** in v1 |
+| **Foundation model** | 5 CyberSecEval-4 / AgentDojo benchmarks via [Inspect AI](https://inspect.aisi.org.uk) | one threshold per benchmark, on that benchmark's own headline metric |
+| **Open weights** | 5 Hugging Face scanners (protectAI, ClamAV, picklescan, VirusTotal, JFrog), harvested not recomputed | any file any scanner calls unsafe blocks; *not scanned* ≠ safe |
+| **MCP server** | full [`mcp-scanner`](https://github.com/cisco-ai-defense/mcp-scanner) sweep of cloned source | severity rule, advisory by default |
+| **Agent skill** | full [`skill-scanner`](https://github.com/cisco-ai-defense/skill-scanner) sweep | severity rule + the scanner's own verdict, advisory by default |
+
+The LLM suite is deliberately all pure-API — no Docker sandboxes — so a governance run takes
+minutes and can be repeated cheaply.
 
 For MCP servers and skills, **the scanner is the evaluation.** No benchmark scores a specific
-server or skill — MCP-Bench, MCP-Universe, MCPSecBench and MCP-SafetyBench all measure how a
+server or skill: MCP-Bench, MCP-Universe, MCPSecBench and MCP-SafetyBench all measure how a
 *client model* behaves when handed servers. And because scanner findings have no fixed
-denominator (a count tracks how much code there is, not how dangerous it is), the gate is a
-severity rule rather than a score: normalising findings to 0–100 and thresholding that would
-be inventing precision. Both start in advisory mode, which can withhold approval but never
-grant it, because there is no false-positive baseline yet.
+denominator — a finding count tracks how much code there is, not how dangerous it is — the gate
+is a severity rule rather than a score.
 
 ## Quick start
+
+Requires Docker. On macOS, [Colima](https://github.com/abiosoft/colima) works well:
 
 ```bash
 brew install colima docker docker-compose
 colima start --cpus 4 --memory 8 --disk 60 --vm-type vz
 
-cp env.example .env        # optional — see "No keys required" below
+cp env.example .env        # optional, see below
 docker compose up --build
 ```
 
-| Service | URL | Notes |
-|---|---|---|
-| Frontend | http://localhost:3000 | |
-| Backend | http://localhost:8000/docs | OpenAPI browser |
-| Gateway | http://localhost:4001/health/readiness | 4001, not 4000 — see below |
+| Service | URL |
+|---|---|
+| App | http://localhost:3000 |
+| API docs | http://localhost:8000/docs |
+| Model gateway | http://localhost:4001/health/readiness |
 
-Verify the stack:
+### No API keys required
 
-```bash
-curl -s localhost:8000/api/gateway/status          # gateway reachable?
-curl -s localhost:8000/api/models                 # aliases available to submit
-curl -s -X POST localhost:8000/api/preflight \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"mock-target-compliant","judge_model":"mock-judge"}'
-```
+The bundled gateway ships mock model routes, so a clean checkout with an empty `.env` boots and
+passes preflight with **no API key of any kind**. For real evaluation, point it at local models
+(Ollama) or any OpenAI-compatible endpoint.
 
-### No keys required
+Local models are the default, so development and the entire test suite cost nothing.
 
-The gateway ships mock model routes (`mock-target-compliant`, `mock-target-refusal`,
-`mock-target-policy-block`, `mock-judge`) implemented as custom LiteLLM providers. A clean
-checkout with an empty `.env` boots and passes preflight with **no API key of any kind**.
-Mocks prove wiring only — a run records which judge graded it, so a `mock-judge` run can
-never be mistaken for a real evaluation.
+## Bring your own models
 
-### Compose is on port 4001
-
-LiteLLM's conventional port is 4000, which is commonly already taken by another project's
-gateway. Silently colliding with one is worse than using a neighbouring port, so the
-container listens on 4000 internally and publishes to **4001** on the host.
-
-## Everything speaks OpenAI-compatible
-
-The hard requirement: **never assume a direct provider API key.** Any endpoint that accepts
-an OpenAI-format base URL and bearer key must work out of the box, and no benchmark may
-assume a particular provider's credentials.
-
-The backend knows exactly two things about reaching a model:
+Everything speaks **OpenAI-compatible base URL + API key**. There is no assumption of a direct
+provider account anywhere in the stack.
 
 ```
 GATEWAY_BASE_URL=http://gateway:4000/v1
 GATEWAY_API_KEY=sk-local
 ```
 
-Point those at a work LiteLLM instance, a local vLLM server, or `api.openai.com` directly
-and nothing else changes. A direct provider key is *supported*, never *assumed*.
+Point those at a corporate LiteLLM instance, a local vLLM server, or `api.openai.com` and
+nothing else changes. A direct provider key is *supported*, never *assumed*.
 
-One gateway config drives all three compute engines — the env var names are each engine's
-own, but they carry the same base-URL-plus-key pair:
+One gateway drives all three compute engines. Models are configured in
+`gateway/litellm_config.yaml` as aliases; the app only ever sees the alias:
 
-| Engine | Base URL | Key | Model |
-|---|---|---|---|
-| Inspect AI | `GATEWAY_BASE_URL` | `GATEWAY_API_KEY` | `openai-api/gateway/<alias>` |
-| mcp-scanner | `MCP_SCANNER_LLM_BASE_URL` | `MCP_SCANNER_LLM_API_KEY` | `MCP_SCANNER_LLM_MODEL` |
-| skill-scanner | `SKILL_SCANNER_LLM_BASE_URL` | `SKILL_SCANNER_LLM_API_KEY` | `SKILL_SCANNER_LLM_MODEL` |
-
-Two safeguards keep this true rather than aspirational:
-
-- **The UI offers a dropdown of gateway aliases, never a free-text model field**, so a
-  provider-native model string cannot be typed into a run.
-- **Preflight runs a real completion for the subject *and* the judge before any run
-  starts**, and returns the upstream error body verbatim on failure. Judge routing is the
-  more common breakage: `inspect_evals` tasks default their graders to hardcoded
-  `openai/gpt-4o-mini`, which goes straight to api.openai.com.
-
-## Model aliases
-
-Configured in `gateway/litellm_config.yaml`. Add upstreams there; the app needs no changes.
-
-| Alias | Upstream | Role |
-|---|---|---|
-| `gemma4`, `gemma4-e2b` | local Ollama | **default subject** — free |
-| `qwen35` | local Ollama | **default judge** — free |
-| `gpt-5.6-luna` | OpenAI | calibration judge ($0.20/$1.20 per M tokens) |
-| `gemini-3.5-flash-lite` | Google AI Studio | fallback calibration judge ($0.30/$2.50 per M) |
-| `mock-target-*`, `mock-judge` | in-process mocks | zero-key boot proof only |
-
-Defaults are local so development and the whole test suite cost nothing. Hosted models are
-opt-in via `DEFAULT_JUDGE_MODEL` and only needed for Phase 5 threshold calibration.
-
-> `gpt-5.6-luna` currently returns `RateLimitError: You have no credits remaining` — the
-> OpenAI account needs credits before it can be used as a judge. Nothing depends on it
-> today.
+| Alias | Role |
+|---|---|
+| `gemma4`, `gemma4-e2b` | default subject model (local Ollama) |
+| `qwen35` | default judge (local Ollama) |
+| `gpt-5.6-luna`, `gemini-3.5-flash-lite` | optional hosted judges for calibration |
+| `mock-target-*`, `mock-judge` | zero-key boot proof |
 
 > **Alias rule:** no slashes or colons. Inspect parses model strings as
-> `openai-api/<provider>/<model>` and splits on `/`, so `gemma4:e2b` is aliased to
-> `gemma4-e2b`. The real name stays in `litellm_params.model`.
+> `openai-api/<provider>/<model>`, so `gemma4:e2b` is aliased to `gemma4-e2b`.
 
-### Local models
+Two safeguards keep the "no provider assumptions" claim true rather than aspirational:
 
-Ollama runs on the **host** by default; Colima maps `host.docker.internal`. If that mapping
-misbehaves, run Ollama in-cluster instead:
-
-```bash
-docker compose --profile local-models up
-docker compose exec ollama ollama pull gemma4
-```
+- The UI offers a **dropdown of gateway aliases**, never a free-text model field.
+- **Preflight runs a real completion for the subject and the judge** before any run starts, and
+  returns the upstream error body verbatim on failure. Judge routing is the usual breakage:
+  `inspect_evals` tasks default their graders to a hardcoded `openai/gpt-4o-mini`, so the eval
+  subprocess is launched with every provider credential stripped and those defaults overridden.
 
 ## Architecture
 
 ```
 compose.yaml
-  gateway   :4001->4000   LiteLLM — the single OpenAI-compatible surface
-  backend   :8000         FastAPI + Inspect AI + inspect-evals + both Cisco scanners
-  frontend  :3000         Next.js App Router
-  ollama    :11434        optional, profile: local-models
+  gateway   :4001 → 4000   LiteLLM — the single OpenAI-compatible surface
+  backend   :8000          FastAPI + Inspect AI + both Cisco scanners
+  frontend  :3000          Next.js App Router
+  ollama    :11434         optional, profile: local-models
 ```
 
-SQLite lives on the `appdata` volume alongside eval logs, scanner reports, and per-run
-clone workspaces. All DB access goes through SQLModel, so swapping in a hosted Postgres is a
-connection-string change rather than a rewrite.
+SQLite on a volume, alongside eval logs, scanner reports and per-run clone workspaces. DB access
+goes through SQLModel, so moving to Postgres is a connection-string change.
 
-### Why the gateway is a separate image
+The gateway is a separate image because `litellm[proxy]` requires `boto3>=1.43.1` while
+`inspect-ai` requires `aioboto3`, which caps it lower — they cannot share a virtualenv. The plain
+`litellm` library coexists fine, so the Cisco scanners live in the backend image alongside
+Inspect. `backend/tests/test_engine_coexistence.py` asserts this arrangement.
 
-`litellm[proxy]` requires `boto3>=1.43.1`, while `inspect-ai` requires `aioboto3>=13.0.0`,
-whose current release caps `boto3<1.40.62`. They cannot share a virtualenv. The plain
-`litellm` **library** coexists fine, which is why the Cisco scanners (which use it as a
-library) install into the same venv as Inspect — one backend image, one venv.
+### Safety of the tool itself
 
-`backend/tests/test_engine_coexistence.py` asserts this arrangement, so if the upstream
-constraints change, a test tells us rather than a confusing runtime failure.
+A governance tool that could be compromised by the artifacts it inspects would be worse than no
+tool. Submitted code is **never executed**:
 
-### Known upstream pins
-
-Both are in `gateway/requirements.txt` with the reasoning inline:
-
-- `litellm[proxy]>=1.85.1,<2` — **security.** Versions 1.82.7 and 1.82.8 were malicious
-  (TeamPCP PyPI compromise, 2026-03-24) and shipped a `.pth` payload that executed on every
-  Python process start. Safe ranges are `<=1.82.6` or `>=1.83.0`. The backend carries the
-  same floor because litellm arrives there transitively via the scanners.
-- `fastapi<0.140.7` — **compatibility.** litellm 1.95.0 declares `fastapi<1.0,>=0.136.3`,
-  but that ceiling is wrong: fastapi removed
-  `fastapi.dependencies.utils.get_flat_dependant`, which litellm's management endpoints
-  import at startup, so the proxy dies before binding a port. Bisected boundary: present
-  through 0.140.6, gone from 0.140.7. The backend is unaffected and tracks current fastapi.
+- `git clone --depth 1`, hooks disabled, no submodules, no build step — read only.
+- Zip uploads stream with a size cap and reject traversal, symlinks and bombs.
+- Non-URL submissions must resolve inside an allowlisted directory.
+- `mcp-scanner`'s `stdio`/`remote` modes *launch* the server under test, so they are off by
+  default.
 
 ## Testing
 
-Success criteria for every part of the build are written down as checkable gates in
-[ACCEPTANCE.md](ACCEPTANCE.md), and `scripts/e2e.sh` executes them against a real stack:
-
 ```bash
-scripts/e2e.sh              # build, launch, verify all criteria, tear down
-scripts/e2e.sh --keep-up    # leave the stack running afterwards
-scripts/e2e.sh --no-build   # reuse existing images
+scripts/e2e.sh              # build, launch, verify every acceptance criterion, tear down
+scripts/e2e.sh --keep-up    # leave the stack running
+scripts/calibrate.sh        # measure detection against the vendor eval corpora
+cd backend && uv run pytest # pure-logic tests
 ```
 
-Four rules keep this honest:
+Success criteria are written down as checkable gates in [ACCEPTANCE.md](ACCEPTANCE.md) and
+executed by `scripts/e2e.sh`. Four rules keep them honest:
 
-1. **End-to-end over unit.** Criteria are satisfied by real HTTP against a running stack,
-   real model calls, and real subprocesses. Unit tests cover only pure logic (credential
-   scrubbing, score normalization, gate arithmetic) where a real round trip proves nothing
-   extra.
-2. **No mocked model call backs a correctness claim.** The gateway's mock routes prove
-   exactly one thing — that the stack boots and passes preflight with zero API keys.
-3. **Local models only.** Every gate runs against host Ollama (`gemma4`, `qwen35`) through
-   the gateway. `gpt-5.6-luna` and `gemini-3.5-flash-lite` are reserved for Phase 5
-   threshold calibration and are never touched by the suite. **A full run costs $0.**
-4. **Judged paths are actually judged.** Any criterion involving a grader routes the judge
-   through the gateway too, so judge misrouting can't hide behind a passing subject.
+1. **End-to-end over unit.** Criteria are satisfied by real HTTP against a running stack, real
+   model calls, real subprocesses. Unit tests cover only pure logic where a round trip would
+   prove nothing extra.
+2. **No mocked model call backs a correctness claim.** The mock routes prove one thing: the stack
+   boots with zero keys.
+3. **Local models only.** A full run costs **$0**.
+4. **Judged paths are actually judged**, so judge misrouting can't hide behind a passing subject.
 
-The two criteria that matter most are 0.7 and 0.8: Inspect AI running a real eval through
-the gateway, and a real *model-graded* eval routing its judge through the same gateway. The
-path exercised is backend container → gateway container → host Ollama, with every provider
-credential stripped from the eval subprocess. You can run them directly:
+`scripts/calibrate.sh` runs the whole pipeline over the labelled corpora the Cisco repos ship
+(141 malicious MCP servers across 14 threat categories; 17 malicious and 4 safe skills) and
+reports recall, plus a false-positive rate with its denominator attached.
 
-```bash
-curl -s -X POST localhost:8000/api/selftest/inspect \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"gemma4","judge_model":"qwen35","include_judge":true}'
-```
+## Configuration
 
-Or run the eval child standalone, outside the app, to debug gateway wiring in isolation:
+| Variable | Default | Purpose |
+|---|---|---|
+| `GATEWAY_BASE_URL` | `http://gateway:4000/v1` | OpenAI-compatible endpoint |
+| `GATEWAY_API_KEY` | `sk-local` | bearer token for the above |
+| `DEFAULT_SUBJECT_MODEL` | `gemma4` | pre-selected model in the UI |
+| `DEFAULT_JUDGE_MODEL` | `qwen35` | grader for judged benchmarks |
+| `SCANNER_MODEL` | `gemma4` | LLM analyzer for the Cisco scanners |
+| `OPENAI_API_KEY`, `GEMINI_API_KEY` | — | consumed by the gateway only |
 
-```bash
-cd backend
-GATEWAY_BASE_URL=http://localhost:4001/v1 GATEWAY_API_KEY=sk-local \
-  uv run python -m app.engines.inspect_child \
-    --task gateway_judge_selftest \
-    --model openai-api/gateway/gemma4 \
-    --judge-model openai-api/gateway/qwen35 \
-    --log-dir /tmp/inspect-logs
-```
+Governance thresholds live in `backend/policy/policy.yaml`. It is content-hashed into every run,
+so editing a threshold never silently rewrites the meaning of a past decision.
 
-## Development
-
-```bash
-# Backend
-cd backend && uv sync && uv run pytest
-GATEWAY_BASE_URL=http://localhost:4001/v1 GATEWAY_API_KEY=sk-local \
-  uv run uvicorn app.main:app --reload --port 8000
-
-# Gateway on the host (needs its own venv — see the boto3 conflict above)
-uv venv .venv-gateway --python 3.12
-uv pip install --python .venv-gateway -r gateway/requirements.txt
-bash gateway/start_proxy.sh
-
-# Frontend
-cd frontend && npm install && npm run dev
-```
-
-## Operating it
-
-### Calibrating the thresholds
-
-`backend/policy/policy.yaml` is the gate; the code only evaluates it. Every run records the
-policy version and a content hash, so a threshold edited next month does not silently rewrite
-the meaning of a decision made today.
-
-To calibrate: point `DEFAULT_JUDGE_MODEL` at a hosted judge, run 2–3 models you have already
-approved, and adjust thresholds until those models come back `auto_approve`. Nothing else
-changes — a test asserts that a stored run re-decides differently when only the YAML changes.
-
-### Graduating MCP/skill from advisory to gating
-
-Both scanner-backed classes ship as `mode: advisory`, which can withhold approval but never
-grant it. That is deliberate: without a false-positive baseline, an untuned severity rule
-cannot be trusted to approve anything.
+### Graduating MCP/skills out of advisory mode
 
 ```bash
 curl -s localhost:8000/api/stats/severity   # findings by analyzer and severity, all runs
 ```
 
-When the distribution shows that `block_on` is discriminating rather than firing on
-everything, change `mode: advisory` to `mode: gating` for that asset class. That single line
-is the whole change.
+When the distribution shows `block_on` is discriminating rather than firing on everything, change
+`mode: advisory` to `mode: gating` for that asset class. That single line is the whole change.
 
-**There is a better route than waiting for submissions to accumulate.** Both Cisco scanner
-repos ship labelled eval corpora — in the GitHub repos, not the PyPI packages, which is why
-they are not vendored here:
+Note that `mcp-scanner` has no CRITICAL severity — HIGH is the top of its scale and is what
+blocks there. `skill-scanner` does emit CRITICAL.
 
-| Corpus | Contents | What it yields |
-|---|---|---|
-| [`mcp-scanner/evals`](https://github.com/cisco-ai-defense/mcp-scanner/tree/main/evals) | 141 synthetic malicious MCP servers across 14 threat categories, ground-truth labelled | detection rate and miss rate — **recall only**, there is no benign baseline |
-| [`skill-scanner/evals`](https://github.com/cisco-ai-defense/skill-scanner/tree/main/evals) | labelled skills including `expected_safe: true` cases, plus ~119 real-world skills | precision, recall, F1 **and false-positive rate** |
+## Known limitations
 
-The skill corpus gives the false-positive baseline that advisory mode is waiting for, so
-skills can graduate to `gating` on evidence. The MCP corpus tells you what the scanner
-catches but not how often it cries wolf, so MCP needs benign servers added — a set of
-well-known public servers scanned and reviewed once would do it.
+Worth reading before trusting a result:
 
-```bash
-git clone --depth 1 https://github.com/cisco-ai-defense/skill-scanner /tmp/ss
-cd /tmp/ss && uv run python evals/runners/benchmark_runner.py --output results.json
-```
+- **Thresholds are not calibrated.** They are structurally correct placeholders. Calibrating them
+  needs runs against models whose behaviour you actually care about; local models can't stand in.
+  It is a `policy.yaml` edit, not a code change.
+- **MCP and skills run in advisory mode.** They can withhold approval but never grant it, because
+  the false-positive baseline is thin — 3 benign MCP servers and 4 safe skills in the vendor
+  corpora. Adding benign servers is the prerequisite for `mode: gating`.
+- **Scan time scales with file count.** A single-server submission takes ~40 seconds including the
+  dependency audit. Monorepos are slow because the behavioral analyzer invokes a model per source
+  file, so they are capped at 40 files with the shortfall reported *as a finding*. Submit one
+  server, not a monorepo.
+- **Tools are not enumerated live.** Getting a server's real tool list means launching it, which
+  is executing untrusted code. Detection is therefore source-based and cannot see tools generated
+  at runtime.
+- **Dependency audit covers pinned packages only**, because pip-audit's resolution venv fails on
+  some hosts. When it fails the scanner reports "SAFE (0 findings)", so that failure is detected
+  and recorded as a finding rather than trusted.
+- **No local weight-scanner fallback.** Open-weight results are harvested from Hugging Face only;
+  a gated or unscanned repo is reported as unassessed.
+- **Additive schema changes only.** SQLite columns are reconciled on startup; renames and drops
+  would need a real migration.
 
-Bear in mind `mcp-scanner` has no CRITICAL severity — HIGH is the top of its scale, so HIGH is
-what actually blocks there. `skill-scanner` does emit CRITICAL.
+## Roadmap
 
-### Adding a published score
+Ideas, roughly in order of value:
 
-```bash
-curl -s -X POST localhost:8000/api/published-scores/extract \
-  -H 'Content-Type: application/json' \
-  -d '{"url":"https://.../system-card"}'      # proposes candidates, saves nothing
-```
+- **Calibrate the thresholds** against a funded run of models the org actually uses, and graduate
+  MCP/skills out of advisory mode once a benign corpus exists.
+- **Benign MCP corpus** — scan and review a set of well-known public servers to establish the
+  false-positive baseline the severity rule is missing.
+- **Local weight scanning** with [`modelaudit`](https://www.promptfoo.dev/docs/model-audit/) for
+  repos Hugging Face hasn't scanned, or that are gated or private.
+- **Docker eval tier** — `cyse2_interpreter_abuse`, `cyse2_vulnerability_exploit`, `cybench`,
+  `cve_bench` and AgentDojo's sandbox suites, for the deep-testing path.
+- **Antares as an extra source analyzer.** Cisco's open-weight vulnerability-localisation models
+  are cheap and run locally; note their model card rules them out as a general judge.
+- **Re-run a stored decision under a new policy** from the UI, so a threshold change can be
+  reviewed against history before it is adopted.
+- **Postgres + Alembic** for multi-user deployments.
+- **CI workflow** running the pure-logic suite on every push.
+- **Export a decision record** (PDF or signed JSON) for attaching to a ticket.
 
-Review each candidate against its quoted sentence, then POST the ones you believe to
-`/api/published-scores`. The confirmation step is not ceremony: an unreviewed number
-extracted by a model reading prose could auto-approve a model that was never measured.
+## Contributing
 
-### Known limitations, stated plainly
+Issues and pull requests welcome. Please run `cd backend && uv run pytest` and
+`cd frontend && npm run build` before opening a PR. If you touch scoring or gating, add a test —
+those invariants are the point of the project.
 
-- **Thresholds are uncalibrated placeholders.** See above.
-- **Scan time scales with file count, not with the tool.** Measured: a single-server
-  submission (1 tool, 1 source file) scans in **41 seconds** including dependency audit —
-  which is the normal case, since people upload one server. A monorepo is what is slow,
-  because the behavioral analyzer invokes a model per source file. Monorepos are capped at 40
-  files with the shortfall reported as a finding, since a scan that silently covered part of a
-  tree reads exactly like one that found nothing. Submit the individual server, not a
-  monorepo.
-- **Tools are not enumerated live.** Getting a server's real tool list means launching it,
-  which is executing untrusted code. Detection therefore comes from source analysis and
-  cannot see tools generated at runtime.
-- **Dependency audit covers pinned packages only.** pip-audit's resolution venv aborts on
-  some hosts, and when it fails the scanner reports "SAFE (0 findings)". We detect that and
-  record it as a finding instead, running the audit with `--no-deps --disable-pip`.
-- **No local weight-scanner fallback.** Open-weight supply-chain results are harvested from
-  the Hub only. A gated, private, or unscanned repo is reported as unassessed rather than
-  scanned locally — wiring in `modelaudit` (Promptfoo, widest format coverage) is the natural
-  next step, and would mean downloading weights.
-- **No Docker eval tier.** `cyse2_interpreter_abuse`, `cyse2_vulnerability_exploit`,
-  `cybench`, `cve_bench` and AgentDojo's sandbox suites need Docker-in-Docker. The five
-  shipped benchmarks are all pure-API by design.
+## License
 
-## Deployment
-
-Not deployed anywhere — local only. Each component builds independently, so an organisation
-can take any one of them and run it their own way.
-
-Swapping SQLite for a hosted database is the one change most deployments will want: all DB
-access goes through SQLModel, so it is a connection-string change in `app/config.py` rather
-than a rewrite.
+MIT — see [LICENSE](LICENSE).

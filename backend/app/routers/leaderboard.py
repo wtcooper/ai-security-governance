@@ -44,6 +44,7 @@ class LeaderboardRow(BaseModel):
     composite_score: float | None
     composite_is_display_only: bool = True
     judge_model: str | None
+    judge_unresolved_rate: float | None
     judge_refusal_rate: float | None
     policy_version: str | None
     gates_passed: int
@@ -85,6 +86,7 @@ def leaderboard(
                 decision_reason=run.decision_reason,
                 composite_score=jobs.composite_for_run(session, run.id, policy),
                 judge_model=run.judge_model,
+                judge_unresolved_rate=run.judge_unresolved_rate,
                 judge_refusal_rate=run.judge_refusal_rate,
                 policy_version=run.policy_version,
                 gates_passed=sum(1 for s in gated if s.passed),

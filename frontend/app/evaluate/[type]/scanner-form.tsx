@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { ScanSearch } from "lucide-react";
 import { createRun, type AssetType } from "@/lib/api";
 
 /**
@@ -44,39 +45,39 @@ export function ScannerForm({
   }
 
   return (
-    <form onSubmit={onSubmit} className="space-y-4 rounded-lg border border-edge bg-surface p-5">
+    <form onSubmit={onSubmit} className="space-y-5 rounded-card border border-rule bg-surface p-5">
       <label className="block space-y-1.5">
-        <span className="block text-xs text-muted">Repository URL</span>
+        <span className="eyebrow block">Repository URL</span>
         <input
           value={identifier}
           onChange={(e) => setIdentifier(e.target.value)}
           placeholder="https://github.com/owner/repo"
           required
-          className="w-full rounded border border-edge bg-ink px-2 py-1.5 font-mono text-sm"
+          className="tnum w-full rounded border border-rule bg-surface px-2.5 py-2 text-[13px]"
         />
       </label>
 
       <label className="block space-y-1.5">
-        <span className="block text-xs text-muted">Display name (optional)</span>
+        <span className="eyebrow block">Display name (optional)</span>
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
-          className="w-full rounded border border-edge bg-ink px-2 py-1.5 text-sm"
+          className="w-full rounded border border-rule bg-surface px-2.5 py-2 text-[13px]"
         />
       </label>
 
-      <div className="space-y-1 text-xs text-muted">
+      <div className="space-y-1.5 text-[12px] leading-relaxed text-muted">
         <p>
           The repository is shallow-cloned and analysed statically. Nothing in it is ever
           executed, and its git hooks are disabled.
         </p>
         <p>
-          Analyzer model: <span className="font-mono">{analyzerModel}</span> via the gateway.
+          Analyzer model: <span className="tnum">{analyzerModel}</span> via the gateway.
         </p>
       </div>
 
       {error && (
-        <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded border border-fail/40 bg-fail/10 px-3 py-2 text-xs text-fail">
+        <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded border border-block/30 bg-block-wash px-3 py-2 text-[11px] leading-relaxed text-block">
           {error}
         </pre>
       )}
@@ -84,8 +85,9 @@ export function ScannerForm({
       <button
         type="submit"
         disabled={submitting || !identifier.trim()}
-        className="rounded bg-accent px-4 py-2 text-sm font-medium text-ink disabled:opacity-50"
+        className="inline-flex items-center gap-2 rounded bg-ink px-4 py-2 text-[13px] font-medium text-paper transition-opacity hover:opacity-90 disabled:opacity-40"
       >
+        <ScanSearch size={13} strokeWidth={2.5} aria-hidden="true" />
         {submitting ? "Cloning and scanning…" : "Start scan"}
       </button>
     </form>

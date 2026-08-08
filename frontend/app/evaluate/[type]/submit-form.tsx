@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { Play } from "lucide-react";
 import { createRun } from "@/lib/api";
 
 /**
@@ -55,21 +56,21 @@ export function SubmitForm({
 
   if (models.length === 0) {
     return (
-      <p className="rounded border border-fail/40 bg-fail/10 px-4 py-3 text-sm text-fail">
+      <p className="rounded-card border border-block/30 bg-block-wash px-4 py-3 text-[13px] text-block">
         No models available from the gateway, so there is nothing to evaluate.
       </p>
     );
   }
 
   return (
-    <form onSubmit={onSubmit} className="space-y-4 rounded-lg border border-edge bg-surface p-5">
+    <form onSubmit={onSubmit} className="space-y-5 rounded-card border border-rule bg-surface p-5">
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="space-y-1.5">
-          <span className="block text-xs text-muted">Model (gateway alias)</span>
+          <span className="eyebrow block">Model (gateway alias)</span>
           <select
             value={identifier}
             onChange={(e) => setIdentifier(e.target.value)}
-            className="w-full rounded border border-edge bg-ink px-2 py-1.5 font-mono text-sm"
+            className="tnum w-full rounded border border-rule bg-surface px-2.5 py-2 text-[13px]"
           >
             {subjectCandidates.map((model) => (
               <option key={model} value={model}>
@@ -80,11 +81,11 @@ export function SubmitForm({
         </label>
 
         <label className="space-y-1.5">
-          <span className="block text-xs text-muted">Judge / grader</span>
+          <span className="eyebrow block">Judge / grader</span>
           <select
             value={judge}
             onChange={(e) => setJudge(e.target.value)}
-            className="w-full rounded border border-edge bg-ink px-2 py-1.5 font-mono text-sm"
+            className="tnum w-full rounded border border-rule bg-surface px-2.5 py-2 text-[13px]"
           >
             {models.map((model) => (
               <option key={model} value={model}>
@@ -95,35 +96,33 @@ export function SubmitForm({
         </label>
 
         <label className="space-y-1.5">
-          <span className="block text-xs text-muted">Display name (optional)</span>
+          <span className="eyebrow block">Display name (optional)</span>
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder={identifier}
-            className="w-full rounded border border-edge bg-ink px-2 py-1.5 text-sm"
+            className="w-full rounded border border-rule bg-surface px-2.5 py-2 text-[13px]"
           />
         </label>
 
         <label className="space-y-1.5">
-          <span className="block text-xs text-muted">
-            Sample limit (optional, per benchmark)
-          </span>
+          <span className="eyebrow block">Sample limit (optional)</span>
           <input
             value={limit}
             onChange={(e) => setLimit(e.target.value.replace(/\D/g, ""))}
             placeholder="registry default"
-            className="w-full rounded border border-edge bg-ink px-2 py-1.5 text-sm"
+            className="w-full rounded border border-rule bg-surface px-2.5 py-2 text-[13px]"
           />
         </label>
       </div>
 
-      <p className="text-xs text-muted">
+      <p className="text-[12px] leading-relaxed text-muted">
         Subject and judge are both preflighted with a real completion before the run starts, so
         a broken model route fails immediately instead of part-way through.
       </p>
 
       {error && (
-        <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded border border-fail/40 bg-fail/10 px-3 py-2 text-xs text-fail">
+        <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded border border-block/30 bg-block-wash px-3 py-2 text-[11px] leading-relaxed text-block">
           {error}
         </pre>
       )}
@@ -131,8 +130,9 @@ export function SubmitForm({
       <button
         type="submit"
         disabled={submitting}
-        className="rounded bg-accent px-4 py-2 text-sm font-medium text-ink disabled:opacity-50"
+        className="inline-flex items-center gap-2 rounded bg-ink px-4 py-2 text-[13px] font-medium text-paper transition-opacity hover:opacity-90 disabled:opacity-40"
       >
+        <Play size={13} strokeWidth={2.5} aria-hidden="true" />
         {submitting ? "Preflighting and starting…" : "Start evaluation"}
       </button>
     </form>

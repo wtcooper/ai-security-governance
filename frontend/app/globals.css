@@ -1,19 +1,72 @@
 @import "tailwindcss";
 
+/* Light only, by design. There is no dark palette and no prefers-color-scheme branch: a
+   governance record is read, quoted, and printed, and one appearance keeps it predictable. */
+
 @theme {
-  --color-ink: #0d1117;
-  --color-surface: #161b22;
-  --color-edge: #26303d;
-  --color-muted: #8b98a8;
-  --color-accent: #4a9eff;
-  --color-pass: #3fb950;
-  --color-warn: #d29922;
-  --color-fail: #f85149;
+  /* Cool instrument-panel neutrals — lab paper rather than warm cream. */
+  --color-paper: #fbfbfd;
+  --color-surface: #ffffff;
+  --color-rule: #e3e6ec;
+  --color-rule-strong: #cfd4dd;
+  --color-ink: #14181f;
+  --color-muted: #5c6672;
+  --color-faint: #8a929c;
+
+  /* Verdict signals. Chosen dark enough to read on white and to stay distinguishable in
+     greyscale, because a decision must survive being printed. */
+  --color-pass: #0f6f5c;
+  --color-pass-wash: #eef6f4;
+  --color-warn: #9a6400;
+  --color-warn-wash: #fdf6e8;
+  --color-block: #a62a21;
+  --color-block-wash: #fdf0ef;
+
+  --font-sans: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, monospace;
+
+  --radius-card: 4px;
+}
+
+html {
+  background-color: var(--color-paper);
 }
 
 body {
-  background-color: var(--color-ink);
-  color: #e6edf3;
-  font-family:
-    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background-color: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  /* Slightly tightened default: this UI is mostly labels and measurements, not prose. */
+  font-feature-settings: "cv05", "ss03";
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Numbers are the content here, so they get tabular figures everywhere they appear. */
+.tnum {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Small uppercase label used for column heads and field names. */
+.eyebrow {
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-faint);
+}
+
+/* Keyboard focus stays visible and uses ink rather than the browser default blue. */
+:where(a, button, select, input, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-ink);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
 }

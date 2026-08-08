@@ -141,19 +141,51 @@ def _build_registry_task(check_id: str, judge_model: str | None):
     return builder(**kwargs)
 
 
-def _judge_unresolved_rate(
+def _judge_parse_failure_rate(log: Any) -> float | None:
+    """Share of samples where Inspect could not read a grade out of the judge's reply.
+
+    This is the best signal available, and it comes from Inspect rather than from us.
+    `model_graded_qa` instructs the judge in plain text ("end with 'GRADE: $LETTER'"), then
+    extracts the letter with a regex. There is no structured-output contract — no JSON schema,
+    no pydantic model, no tool call. When the regex finds nothing, Inspect does the right
+    thing: it returns `Score.unscored(...)` with `metadata["unscored_reason"] =
+    "grade_parse_failure"` and value NaN, rather than inventing a verdict.
+
+    A judge that refuses on cyber content produces exactly that: prose with no GRADE token, so
+    the sample comes back unscored and flagged. We only have to count them.
+
+    (An earlier version of this module pattern-matched refusal phrasing instead. That was
+    wrong in both directions — see `_judge_refusal_rate` below.)
+    """
+    samples = getattr(log, "samples", None)
+    if not samples:
+        return None
+
+    considered = 0
+    failed = 0
+    for sample in samples:
+        for score in (getattr(sample, "scores", None) or {}).values():
+            considered += 1
+            reason = (getattr(score, "metadata", None) or {}).get("unscored_reason")
+            if reason == "grade_parse_failure":
+                failed += 1
+    if considered == 0:
+        return None
+    return round(failed / considered, 4)
+
+
+def _judge_else_rate(
     metrics: dict[str, float], total_samples: int | None, unresolved_metric_key: str | None
 ) -> float | None:
-    """Structural judge-failure rate, taken from the scorer's own unresolved counter.
+    """Scorer-reported unresolved verdicts, for scorers that classify rather than grade.
 
-    This is the signal worth gating on. Inspect's model-graded scorers do keyword matching on
-    the judge's reply, and when the judge returns nothing usable they fall through to a
-    default verdict — which looks identical to a real grade. Scorers that track that
-    fall-through expose a counter for it (cyse4_mitre's `else_count`), and a count is not
-    open to interpretation the way prose is.
+    `cyse4_mitre` does not use `model_graded_qa`; it runs its own two-stage expansion-then-
+    judge scorer and buckets the judge's verdict as benign / malicious / refusal / else.
+    `else_count` is that last bucket — the judge said something unclassifiable — so it is the
+    equivalent structural signal for this scorer family.
 
-    Returns None when the scorer exposes no such counter, in which case there is no reliable
-    structural signal and the run is not failed on a guess.
+    Returns None when the scorer exposes no such counter, in which case there is no structural
+    signal from this route and the run is not failed on a guess.
     """
     if not unresolved_metric_key or not total_samples:
         return None
@@ -241,7 +273,12 @@ def run(
         from app.engines.registry import get_check
 
         unresolved_metric_key = get_check(task_name).unresolved_metric_key
-    judge_unresolved_rate = _judge_unresolved_rate(metrics, total, unresolved_metric_key)
+    # Two structural routes, depending on the scorer family. Take the worse of the two: both
+    # mean "the judge did not return a usable verdict for this sample".
+    parse_failure_rate = _judge_parse_failure_rate(log)
+    else_rate = _judge_else_rate(metrics, total, unresolved_metric_key)
+    candidates = [r for r in (parse_failure_rate, else_rate) if r is not None]
+    judge_unresolved_rate = max(candidates) if candidates else None
 
     return {
         "task": task_name,
@@ -254,8 +291,10 @@ def run(
         # Samples that produced no score at all. Reported so a partially-failed run is
         # visible rather than silently averaged over fewer samples.
         "unresolved_samples": (total - completed) if (total and completed is not None) else None,
-        # STRUCTURAL and gated on: the scorer's own count of unclassifiable judge verdicts.
+        # STRUCTURAL and gated on: samples where the judge returned no usable verdict.
         "judge_unresolved_rate": judge_unresolved_rate,
+        "judge_grade_parse_failure_rate": parse_failure_rate,
+        "judge_else_rate": else_rate,
         # ADVISORY only: phrasing heuristic, cannot separate judge refusal from subject
         # refusal. Displayed for context; never used to fail a run.
         "judge_refusal_rate_heuristic": refusal_rate,

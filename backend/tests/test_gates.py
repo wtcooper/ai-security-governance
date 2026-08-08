@@ -261,17 +261,54 @@ def test_subject_refusal_text_does_not_count_as_a_judge_refusal():
     )
 
 
-def test_structural_unresolved_rate_uses_the_scorers_own_counter():
-    """Gating signal comes from a count, not from prose."""
-    from app.engines.inspect_child import _judge_unresolved_rate
+def test_grade_parse_failure_is_read_from_inspects_own_flag():
+    """The primary signal is Inspect's, not ours.
+
+    `model_graded_qa` instructs the judge in plain text and extracts the grade with a regex.
+    There is no structured-output contract. When the regex finds nothing, Inspect returns
+    Score.unscored with metadata["unscored_reason"] == "grade_parse_failure" — which is
+    exactly what a judge refusing on cyber content produces. We only count them.
+    """
+    from app.engines.inspect_child import _judge_parse_failure_rate
+
+    class _Score:
+        def __init__(self, reason=None):
+            self.metadata = {"unscored_reason": reason} if reason else {}
+
+    class _Sample:
+        def __init__(self, reason):
+            self.scores = {"scorer": _Score(reason)}
+
+    class _Log:
+        samples = [
+            _Sample("grade_parse_failure"),
+            _Sample(None),
+            _Sample("grade_parse_failure"),
+            _Sample(None),
+        ]
+
+    assert _judge_parse_failure_rate(_Log()) == 0.5
+
+    class _Empty:
+        samples = []
+
+    assert _judge_parse_failure_rate(_Empty()) is None
+
+
+def test_else_bucket_covers_the_scorer_that_classifies_instead_of_grading():
+    """cyse4_mitre runs its own expansion-then-judge scorer, not model_graded_qa.
+
+    Its unclassifiable-verdict bucket (`else_count`) is the equivalent structural signal.
+    """
+    from app.engines.inspect_child import _judge_else_rate
 
     metrics = {"mitre_scorer.accuracy": 0.5, "mitre_scorer.else_count": 3.0}
-    assert _judge_unresolved_rate(metrics, 10, "mitre_scorer.else_count") == 0.3
-    # No counter declared, or the scorer did not report it: no structural signal, so a run is
+    assert _judge_else_rate(metrics, 10, "mitre_scorer.else_count") == 0.3
+    # No counter declared, or not reported: no structural signal from this route, so a run is
     # not failed on a guess.
-    assert _judge_unresolved_rate(metrics, 10, None) is None
-    assert _judge_unresolved_rate({}, 10, "mitre_scorer.else_count") is None
-    assert _judge_unresolved_rate(metrics, 0, "mitre_scorer.else_count") is None
+    assert _judge_else_rate(metrics, 10, None) is None
+    assert _judge_else_rate({}, 10, "mitre_scorer.else_count") is None
+    assert _judge_else_rate(metrics, 0, "mitre_scorer.else_count") is None
 
 
 def test_registry_declares_an_unresolved_counter_for_the_judged_mitre_check():

@@ -496,11 +496,19 @@ def _finalize_run(
 
 
 def composite_for_run(session: Session, run_id: int, policy) -> float | None:
-    """Leaderboard number. Display only — `gates.py` never reads this."""
+    """Leaderboard number. Display only — `gates.py` never reads this.
+
+    Returns None unless every gated benchmark produced a score. A composite over a subset is
+    not comparable to one over the full suite, and showing "100" beside "1/5 gates" reads as
+    a strong result when it actually means almost nothing was measured. Better to show
+    nothing than a number that flatters an incomplete run.
+    """
     scores = session.exec(select(Score).where(Score.run_id == run_id)).all()
     normalized = {
         score.check_id: score.normalized
         for score in scores
         if score.gated and score.normalized is not None
     }
+    if set(normalized) != set(policy.composite_weights):
+        return None
     return normalize.composite_score(normalized, policy.composite_weights)

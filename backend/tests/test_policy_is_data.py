@@ -136,3 +136,26 @@ def test_severity_rollup_penalties_are_defined_for_every_severity(severity):
 
     policy = load_policy(POLICY_PATH)
     assert Severity(severity) in policy.severity_penalty
+
+
+def test_composite_is_withheld_when_coverage_is_incomplete(tmp_path):
+    """A composite over a subset of benchmarks must not be displayed.
+
+    Showing "100" next to "1/5 gates" reads as a strong result when it means almost nothing
+    was measured. The gates already say the run is incomplete; the score must not contradict
+    them.
+    """
+    from app.scoring import normalize
+
+    policy = load_policy(POLICY_PATH)
+    weights = policy.composite_weights
+
+    # One perfect score out of five would compute to 100 if re-normalised over what is
+    # present, which is exactly the misleading number being avoided.
+    partial = {"cyse4_mitre_frr": 100.0}
+    assert normalize.composite_score(partial, weights) == 100.0
+
+    # Full coverage is what makes the number meaningful.
+    full = dict.fromkeys(weights, 100.0)
+    assert normalize.composite_score(full, weights) == 100.0
+    assert set(full) == set(weights)

@@ -22,7 +22,7 @@ import importlib
 
 import pytest
 
-from app.engines.registry import LLM_CHECKS, MetricScale, checks_for, get_check
+from app.engines.registry import CHECKS_BY_ID, LLM_CHECKS, MetricScale, checks_for, get_check
 from app.models import AssetType, Direction
 from app.scoring.policy import load_policy_dir
 from tests.test_gates import POLICY_DIR
@@ -39,6 +39,10 @@ EXPECTED_METRIC_KEYS = {
     "atb_memory_poison": "security.accuracy",
     "atb_autonomy_hijack": "security.accuracy",
     "atb_data_exfil": "security.accuracy",
+    # Verified from a live run: num_jailbreaks / valid_count, a 0-1 rate.
+    "strong_reject": "strong_reject_scorer.jailbreak_rate",
+    # Same scorer family as cyse4_instruct — and, as measured, the same corpus.
+    "cyse4_autocomplete": "security_scorer.vulnerable_percentage",
 }
 
 
@@ -133,25 +137,33 @@ def test_percent_scaled_metrics_are_declared_as_such():
     # 50% vulnerable must become 0.5, not stay 50 and sail past a 0.25 threshold.
     assert instruct.scale.to_rate(50.0) == 0.5
 
+    # Both insecure-code tasks report a 0-100 percentage; everything else reports a rate.
+    percent_scaled = {"cyse4_instruct", "cyse4_autocomplete"}
     for check in LLM_CHECKS:
-        if check.id != "cyse4_instruct":
-            assert check.scale is MetricScale.RATE, check.id
+        expected = MetricScale.PERCENT if check.id in percent_scaled else MetricScale.RATE
+        assert check.scale is expected, check.id
 
 
 def test_every_policy_gate_has_a_registered_check():
-    """A gate with no check can never be satisfied, which would block every run forever."""
+    """A gate with no check can never be satisfied, which would block every run forever.
+
+    The converse is deliberately NOT required: the registry is the catalogue of what CAN be
+    run and the policy is the suite that IS run, so a registered-but-ungated benchmark is a
+    normal state — it is available to add, and costs nothing until it is.
+    """
     policy = load_policy_dir(POLICY_DIR)
     registered = {check.id for check in LLM_CHECKS}
-    assert set(policy.llm_gates) == registered
+    unbacked = set(policy.llm_gates) - registered
+    assert not unbacked, f"gates with no registered check: {sorted(unbacked)}"
 
 
 def test_policy_metric_and_direction_agree_with_the_registry():
     """A disagreement here would threshold a different number than the one displayed."""
     policy = load_policy_dir(POLICY_DIR)
-    for check in LLM_CHECKS:
-        gate = policy.llm_gates[check.id]
-        assert gate.metric == check.metric_name, check.id
-        assert gate.direction == check.direction, check.id
+    for check_id, gate in policy.llm_gates.items():
+        check = CHECKS_BY_ID[check_id]
+        assert gate.metric == check.metric_name, check_id
+        assert gate.direction == check.direction, check_id
 
 
 def test_composite_weights_cover_every_gate():
@@ -276,3 +288,75 @@ def test_no_check_requires_a_sandbox():
     """
     for check in LLM_CHECKS:
         assert check.needs_sandbox is False, check.id
+
+
+# --- the core set: coverage, not count ----------------------------------------------------
+
+
+def test_the_shipped_suite_covers_each_dimension_exactly_once():
+    """The suite is chosen by risk dimension, so no two gated benchmarks may share one.
+
+    This is the guard against the failure the suite already had: three AgentThreatBench gates
+    plus AgentDojo meant four gates on "untrusted tool output redirects an agent", weighting
+    one dimension four times while direct jailbreak robustness had no gate at all.
+    """
+    policy = load_policy_dir(POLICY_DIR)
+    dimension = {
+        "cyse4_mitre": "direct-misuse",
+        "cyse4_mitre_frr": "over-refusal",
+        "strong_reject": "jailbreak-robustness",
+        "cyse4_multilingual_prompt_injection": "injection-via-content",
+        "agentdojo": "injection-via-tools",
+        "atb_memory_poison": "memory-poisoning",
+        "cyse4_instruct": "insecure-code",
+    }
+    gated = set(policy.llm_gates)
+    assert gated == set(dimension), f"suite drift: {gated ^ set(dimension)}"
+    covered = [dimension[c] for c in gated]
+    assert len(set(covered)) == len(covered), f"a dimension is gated twice: {covered}"
+
+
+def test_registered_but_ungated_benchmarks_stay_available():
+    """Retiring a benchmark removes it from the policy, never from the registry.
+
+    Both retired AgentThreatBench tasks and cyse4_autocomplete must remain registered so the
+    policy form can offer them — dropping the code would make the decision irreversible.
+    """
+    policy = load_policy_dir(POLICY_DIR)
+    for check_id in ("atb_autonomy_hijack", "atb_data_exfil", "cyse4_autocomplete"):
+        assert check_id in CHECKS_BY_ID, f"{check_id} was deleted rather than un-gated"
+        assert check_id not in policy.llm_gates, f"{check_id} is unexpectedly in the suite"
+
+
+def test_every_gate_threshold_is_expressible_at_its_sample_size():
+    """A threshold no achievable score can equal is a zero-tolerance gate by accident.
+
+    atb_autonomy_hijack (n=6) and atb_data_exfil (n=8) were both gated at 0.90, where 5/6 =
+    0.833 and 7/8 = 0.875 fall below — so only a perfect score could pass. That may be a
+    defensible bar, but it has to be chosen rather than fall out of a small dataset meeting a
+    round number. This asserts every gated benchmark tolerates at least one failure.
+    """
+    policy = load_policy_dir(POLICY_DIR)
+    for check_id, gate in policy.llm_gates.items():
+        n = gate.planned_samples
+        achievable = [k / n for k in range(n + 1)]
+        passing = [v for v in achievable if gate.passes(v)]
+        assert passing, f"{check_id}: no achievable score passes at n={n}"
+        # "Tolerates a failure" means a non-perfect result can still pass.
+        imperfect_passes = [v for v in passing if 0 < v < 1]
+        assert imperfect_passes or n == 1, (
+            f"{check_id}: threshold {gate.threshold} at n={n} is zero-tolerance — only a "
+            f"perfect score passes. Choose it deliberately or match the dataset resolution."
+        )
+
+
+def test_strong_reject_is_the_only_gate_where_the_user_is_the_attacker():
+    """Documents the distinction that justified adding it.
+
+    Every other injection gate measures INDIRECT attacks — untrusted content or tool output.
+    StrongREJECT is the only one where the adversary is the user talking to the model.
+    """
+    check = get_check("strong_reject")
+    assert check.needs_judge, "its three-axis grader is the reason to prefer it"
+    assert check.direction is Direction.LOWER_IS_BETTER
+    assert check.needs_sandbox is False

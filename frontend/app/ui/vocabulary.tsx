@@ -50,7 +50,7 @@ export const TONE_PANEL: Record<Tone, string> = {
 export const ASSET: Record<AssetType, { icon: LucideIcon; label: string; blurb: string }> = {
   llm: {
     icon: Cpu,
-    label: "LLM",
+    label: "AI Model",
     blurb:
       "Open-weights or frontier models — submitted as a gateway alias, or a Hugging Face repo for weight scans",
   },

@@ -17,7 +17,7 @@ import io
 from pydantic import BaseModel, Field
 from ruamel.yaml import YAML
 
-from app.engines.registry import CHECKS_BY_ID, checks_for
+from app.engines.registry import CHECKS_BY_ID, DEPTH_BY_KEY, DEPTH_PRESETS, checks_for
 from app.models import AssetType
 
 
@@ -157,12 +157,17 @@ def current_form_values(asset_type: AssetType, content: str) -> dict:
         for check in checks_for(AssetType.LLM):
             spec = gates.get(check.id) or {}
             enabled = check.id in gates
+            # An ungated benchmark still needs a sensible sample count to offer, because that
+            # value is what gets written the moment someone enables it. Defaulting to the
+            # registry's `default_limit` would quietly add it at wiring-check depth; the
+            # standard depth is the honest default for something entering the suite.
+            standard = DEPTH_BY_KEY["good"].samples_for(check)
             rows[check.id] = {
                 "enabled": enabled,
                 "metric": check.metric_name,
                 "direction": check.direction.value,
                 "threshold": spec.get("threshold", 0.9),
-                "samples": spec.get("samples", check.default_limit),
+                "samples": spec.get("samples", standard),
                 "sample_ids_count": len(spec.get("sample_ids") or []),
                 "weight": float(weights.get(check.id, 0.1)),
                 "description": check.description,
@@ -171,9 +176,35 @@ def current_form_values(asset_type: AssetType, content: str) -> dict:
                 # So the form can show what a change to `samples` costs, live.
                 "calls_per_sample": check.calls_per_sample,
             }
+        # Depth presets, with the totals they would produce for the ENABLED suite. Computed
+        # here rather than in the UI so the slider can never show a number the backend would
+        # not actually run.
+        depth = []
+        for preset in DEPTH_PRESETS:
+            per_check, tests, calls = {}, 0, 0
+            for check in checks_for(AssetType.LLM):
+                if check.id not in gates:
+                    continue
+                n = preset.samples_for(check)
+                per_check[check.id] = n
+                tests += n
+                calls += n * check.calls_per_sample
+            depth.append(
+                {
+                    "key": preset.key,
+                    "label": preset.label,
+                    "blurb": preset.blurb,
+                    "samples": preset.samples,
+                    "per_check": per_check,
+                    "total_tests": tests,
+                    "total_calls": calls,
+                }
+            )
+
         return {
             "judge_default_model": judge.get("default_model", ""),
             "judge_max_refusal_rate": judge.get("max_refusal_rate", 0.05),
+            "depth_presets": depth,
             "gates": rows,
             "weights_block_on_unsafe_file": bool(
                 (data.get("weights") or {}).get("block_on_unsafe_file", True)

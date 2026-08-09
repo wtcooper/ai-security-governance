@@ -17,7 +17,7 @@ export default async function BenchmarksPage() {
       <section className="space-y-2">
         <h1 className="text-[26px] font-semibold leading-tight tracking-tight">Benchmarks</h1>
         <p className="max-w-2xl text-[13.5px] leading-relaxed text-muted">
-          The LLM security suite: one gate per benchmark, on that benchmark&apos;s own
+          The AI model security suite: one gate per benchmark, on that benchmark&apos;s own
           headline metric. Each page explains the intent, shows real test cases from the
           dataset, and manages the fixed core set that makes runs repeatable. Which
           benchmarks are in the suite — and over how many samples — is set by the policy.

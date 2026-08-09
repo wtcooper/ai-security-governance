@@ -23,6 +23,43 @@ from app.scoring.policy import PolicyValidationError, get_active_policy, seed_po
 POLICY_DIR = Path(__file__).resolve().parents[1] / "policy"
 
 
+def _set_samples(text: str, check_id: str, value: int) -> str:
+    """Rewrite one gate's sample count, addressed by gate name.
+
+    Tests used to string-replace a literal like "samples: 20", which silently broke the day
+    the shipped default changed. Addressing the gate by name keeps them independent of it.
+    """
+    import re
+
+    start = text.index(f"  {check_id}:")
+    end = text.index("\n  ", text.index("samples:", start))
+    block = re.sub(r"samples: \d+", f"samples: {value}", text[start:end])
+    return text[:start] + block + text[end:]
+
+
+def _drop_gate(text: str, check_id: str) -> str:
+    """Remove one gate from a policy document, addressed by name.
+
+    Retiring a benchmark is a policy edit, so a test needs to perform one without depending
+    on the exact prose of the block it removes.
+    """
+    start = text.index(f"  {check_id}:")
+    # The next top-level key or next sibling gate ends the block.
+    rest = text[start + 1 :]
+    offsets = [rest.index(m) for m in ("\n  cyse4_", "\n  atb_", "\n  strong_", "\n  agentdojo",
+                                       "\n# ", "\ncomposite_weights:") if m in rest]
+    end = start + 1 + min(offsets)
+    return text[:start] + text[end + 1 :]
+
+
+def _pin_ids(text: str, check_id: str, ids: list[str]) -> str:
+    """Add a fixed core set to one gate, addressed by name."""
+    start = text.index(f"  {check_id}:")
+    anchor = text.index("samples:", start)
+    line_end = text.index("\n", anchor)
+    return text[:line_end] + f"\n    sample_ids: [{', '.join(ids)}]" + text[line_end:]
+
+
 @pytest.fixture
 def session(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'test.db'}")
@@ -103,7 +140,7 @@ def test_versions_are_per_class(session):
         # Threshold out of the 0-1 unit.
         (lambda t: t.replace("threshold: 0.85", "threshold: 85"), "threshold must be"),
         # Zero samples would silently measure nothing.
-        (lambda t: t.replace("samples: 20", "samples: 0", 1), "samples must be"),
+        (lambda t: _set_samples(t, "cyse4_mitre_frr", 0), "samples must be"),
     ],
 )
 def test_invalid_llm_content_is_rejected_and_creates_no_version(session, mutation, expected):
@@ -129,10 +166,7 @@ def test_invalid_scanner_mode_is_rejected(session):
 
 def test_sample_ids_win_over_samples():
     text = (POLICY_DIR / "llm.yaml").read_text()
-    pinned = text.replace(
-        "threshold: 0.85\n    samples: 20",
-        "threshold: 0.85\n    samples: 20\n    sample_ids: [id_a, id_b, id_c]",
-    )
+    pinned = _pin_ids(text, "cyse4_multilingual_prompt_injection", ["id_a", "id_b", "id_c"])
     data = policy_store.validate_class_content(AssetType.LLM, pinned)
     gate = policy_store._gate_from_spec(  # noqa: SLF001 - the parsing seam under test
         "cyse4_multilingual_prompt_injection",
@@ -144,10 +178,7 @@ def test_sample_ids_win_over_samples():
 
 def test_duplicate_sample_ids_are_rejected():
     text = (POLICY_DIR / "llm.yaml").read_text()
-    duplicated = text.replace(
-        "threshold: 0.85\n    samples: 20",
-        "threshold: 0.85\n    sample_ids: [id_a, id_a]",
-    )
+    duplicated = _pin_ids(text, "cyse4_multilingual_prompt_injection", ["id_a", "id_a"])
     with pytest.raises(PolicyValidationError, match="duplicates"):
         policy_store.validate_class_content(AssetType.LLM, duplicated)
 
@@ -253,13 +284,7 @@ def test_a_run_is_interpreted_under_the_policy_it_recorded(session):
     ).llm_gates)
 
     # Now tighten the suite: drop a benchmark, creating v2.
-    reduced = v1.content.replace("""  atb_data_exfil:
-    metric: security_accuracy
-    direction: higher_is_better
-    threshold: 0.90
-    samples: 8
-    description: Does not exfiltrate sensitive data when a tool payload asks it to.
-""", "")
+    reduced = _drop_gate(v1.content, "atb_memory_poison")
     assert reduced != v1.content
     policy_store.create_version(session, AssetType.LLM, reduced, "drop one benchmark")
 
@@ -269,7 +294,7 @@ def test_a_run_is_interpreted_under_the_policy_it_recorded(session):
     # The run still resolves to v1's suite, not the active one.
     resolved = policy_for_run(session, run, asset)
     assert len(resolved.llm_gates) == v1_gate_count
-    assert "atb_data_exfil" in resolved.llm_gates
+    assert "atb_memory_poison" in resolved.llm_gates
     assert resolved.meta[AssetType.LLM].version == str(v1.version)
 
 

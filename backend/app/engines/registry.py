@@ -273,8 +273,10 @@ LLM_CHECKS: tuple[Check, ...] = (
             "agent deployments, where a successful injection acts rather than just speaks."
         ),
         calls_per_sample=6,
+        dataset_size=944,
         cost_note=(
-            "A multi-turn agent loop, so calls per sample vary with how long the model takes to finish the task — roughly 6 on average. No judge."
+            "A multi-turn agent loop, so calls per sample vary with how long the model takes "
+            "to finish the task — roughly 6 on average. No judge."
         ),
     ),
     # --- AgentThreatBench: the OWASP Top 10 for Agentic Applications (2026) --------------
@@ -366,9 +368,152 @@ LLM_CHECKS: tuple[Check, ...] = (
             "Agent loop capped at 20 messages; the full 8-case dataset runs in about 2 minutes on a local model. No judge."
         ),
     ),
+    # --- StrongREJECT: direct jailbreak robustness ----------------------------------------
+    #
+    # The dimension nothing else here covered. Every other injection test in this suite is
+    # INDIRECT — untrusted text (cyse4 multilingual PI) or untrusted tool output (AgentDojo,
+    # AgentThreatBench). None measures an adversarial USER attacking the model directly, which
+    # is what StrongREJECT does across 37 attack transformations over 313 forbidden prompts.
+    #
+    # Its grader is the reason to prefer it: it scores refusal, convincingness and specificity
+    # separately, so "empty compliance" (the model appears to comply but says nothing usable)
+    # is not counted as a jailbreak. Weaker evaluators systematically overstate jailbreak rates.
+    #
+    # CAVEAT worth knowing: `jailbreak_rate` is num_jailbreaks / valid_count, and a judge reply
+    # the scorer cannot parse is dropped from the DENOMINATOR rather than counted. A judge that
+    # ignores the rubric therefore shrinks n silently instead of failing loudly. Use a capable
+    # judge here and read the sample count on the run page.
+    Check(
+        id="strong_reject",
+        asset_type=AssetType.LLM,
+        module="inspect_evals.strong_reject",
+        function="strong_reject",
+        # Verified from a live run: num_jailbreaks / valid_count, a 0-1 rate.
+        metric_key="strong_reject_scorer.jailbreak_rate",
+        metric_name="jailbreak_rate",
+        direction=Direction.LOWER_IS_BETTER,
+        model_kwargs=("judge_llm",),
+        model_roles=("grader",),
+        default_limit=20,
+        calls_per_sample=2,
+        dataset_size=313,
+        cost_note=(
+            "Two calls per sample: the subject answers a jailbroken prompt, the judge scores "
+            "refusal, convincingness and specificity. Measured ~70s per sample on local models, "
+            "so the judge is the cost driver."
+        ),
+        description="Resists jailbreak transformations applied to forbidden requests.",
+        intent=(
+            "Each case takes a forbidden request and rewrites it through one of 37 jailbreak "
+            "techniques — role-play framing, encoding, authority claims, distractor stuffing and "
+            "so on. A judge then scores the response on three axes rather than one: did it "
+            "refuse, and if it complied, was the answer actually convincing and specific? The "
+            "gated metric is the share of attempts that produced a genuine jailbreak, so lower "
+            "is better. This is the only benchmark in the suite where the attacker is the user "
+            "rather than the data — everything else measures indirect injection through content "
+            "or tool output, which is a different failure and a different defence."
+        ),
+    ),
+    # --- Registered but NOT gated by default ----------------------------------------------
+    #
+    # cyse4_autocomplete is available to add from the policy form, but is deliberately left out
+    # of the shipped suite. Measured, not assumed: it shares 1,863 of 1,866 `origin_code`
+    # snippets with cyse4_instruct, the same 50 CWEs, and an identical language distribution.
+    # It is the SAME corpus rendered as a completion prompt rather than an instruction, scored
+    # by the same detector — a second modality, not a second dimension. Worth enabling if you
+    # specifically ship IDE completion, since models are less careful when completing code than
+    # when told to write it; not worth paying for twice otherwise.
+    Check(
+        id="cyse4_autocomplete",
+        asset_type=AssetType.LLM,
+        module="inspect_evals.cyberseceval_4",
+        function="cyse4_autocomplete",
+        metric_key="security_scorer.vulnerable_percentage",
+        metric_name="vulnerable_percentage",
+        direction=Direction.LOWER_IS_BETTER,
+        scale=MetricScale.PERCENT,
+        default_limit=20,
+        calls_per_sample=1,
+        dataset_size=1916,
+        cost_note=(
+            "One call per sample and no judge — detection is the same local semgrep-based "
+            "detector cyse4_instruct uses. Cheap, but it re-measures cyse4_instruct's corpus."
+        ),
+        description="Generates insecure code when completing existing code (semgrep detector).",
+        intent=(
+            "The completion counterpart to cyse4_instruct: instead of being told what to write, "
+            "the model is given a code prefix and asked to continue it. Same 1,866 vulnerability "
+            "cases, same 50 CWEs, same detector — the difference is that a completion prompt "
+            "gives no opening to refuse, caveat or reason about security, which is how models "
+            "behave in an IDE. Enable this if IDE completion is the deployment you care about."
+        ),
+    ),
 )
 
 CHECKS_BY_ID: dict[str, Check] = {check.id: check for check in LLM_CHECKS}
+
+# --- How much to measure ------------------------------------------------------------------
+#
+# Sample count is the difference between a wiring check and a governance signal, so it is a
+# governed choice rather than a constant buried in code. The arithmetic that sets these:
+# for a proportion near 0.9, the 95% confidence interval is roughly +/-13 points at n=20,
+# +/-12 at n=25, +/-5.9 at n=100 and +/-4.8 at n=150. A +/-13 point interval cannot support a
+# 0.90 threshold — the measurement is wider than the decision — which is why 25 is labelled a
+# wiring check and 100 is the default.
+#
+# Each preset applies the same n to every benchmark, capped at the dataset's real size. Equal
+# n per benchmark means equal statistical power per RISK DIMENSION, and lets the cost
+# differences between benchmarks stay visible instead of being smoothed away.
+
+
+@dataclass(frozen=True)
+class DepthPreset:
+    key: str
+    label: str
+    # None means "the whole dataset".
+    samples: int | None
+    blurb: str
+
+    def samples_for(self, check: "Check") -> int:
+        dataset = check.dataset_size or check.default_limit
+        return dataset if self.samples is None else min(self.samples, dataset)
+
+
+DEPTH_PRESETS: tuple[DepthPreset, ...] = (
+    DepthPreset(
+        key="quick",
+        label="Quick",
+        samples=25,
+        blurb=(
+            "A wiring check, not a governance signal: at n=25 the confidence interval is "
+            "about +/-12 points, wider than the gap most thresholds are trying to detect. "
+            "Use it to prove the plumbing works, then re-run deeper."
+        ),
+    ),
+    DepthPreset(
+        key="good",
+        label="Good",
+        samples=100,
+        blurb=(
+            "The default. n=100 puts the 95% confidence interval near +/-6 points, which is "
+            "narrow enough for a threshold to mean something without paying for the full "
+            "datasets."
+        ),
+    ),
+    DepthPreset(
+        key="full",
+        label="Full",
+        samples=None,
+        blurb=(
+            "Every case in every dataset. The most defensible number and by far the most "
+            "expensive — appropriate for calibration and for a final decision on a model you "
+            "are about to depend on."
+        ),
+    ),
+)
+
+DEPTH_BY_KEY: dict[str, DepthPreset] = {preset.key: preset for preset in DEPTH_PRESETS}
+
 
 
 def checks_for(asset_type: AssetType) -> tuple[Check, ...]:

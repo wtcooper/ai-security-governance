@@ -160,3 +160,16 @@ servers added before `gating`.
 | 9.7 | Disabling every benchmark is refused rather than saved | `tests/test_policy_form.py::test_disabling_every_gate_is_refused_by_validation` |
 | 9.8 | The UI has no YAML surface: viewing and editing a policy are both form-based | browser inspection; `policy-editor.tsx` has no textarea or `<pre>` of content |
 | 9.9 | `pytest` (215) and `npm run build` clean | this suite |
+
+## Phase 10 — The curated core set and measurement depth
+
+| # | Criterion | How it is verified |
+|---|---|---|
+| 10.1 | Seven gated benchmarks, each covering a distinct risk dimension; no dimension gated twice | `tests/test_registry.py::test_the_shipped_suite_covers_each_dimension_exactly_once` |
+| 10.2 | Retiring a benchmark un-gates it in the policy and never deletes it from the registry | `test_registered_but_ungated_benchmarks_stay_available` |
+| 10.3 | Every gate's threshold is expressible at its sample size — no accidental zero-tolerance gate | `test_every_gate_threshold_is_expressible_at_its_sample_size` |
+| 10.4 | StrongREJECT's metric key and direction match a live run (`jailbreak_rate`, lower better) | `test_metric_keys_match_values_captured_from_live_runs` + live run |
+| 10.5 | Depth presets Quick/Good/Full compute per-benchmark counts capped at real dataset sizes | `tests/test_policy_form.py` + live form payload |
+| 10.6 | Default depth is Good (n=100, ±6 points at p≈0.9), not a wiring-check count | policy seed + `test_current_form_values_round_trip` |
+| 10.7 | An ungated benchmark is offered at standard depth, so enabling it cannot silently add a 25-sample gate | `test_an_ungated_benchmark_is_offered_at_standard_depth_not_wiring_depth` |
+| 10.8 | Sample counts are fully user-controlled: presets, per-gate override, or a pinned core set | policy form; browser-verified |

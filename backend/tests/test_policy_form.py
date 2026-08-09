@@ -78,9 +78,12 @@ def test_form_output_passes_the_same_validation_as_raw_edits():
 
 
 def test_pinned_core_set_survives_unless_explicitly_cleared():
-    text = (POLICY_DIR / "llm.yaml").read_text().replace(
-        "threshold: 0.85\n    samples: 20",
-        "threshold: 0.85\n    samples: 20\n    sample_ids: [id_a, id_b]",
+    from tests.test_policy_versions import _pin_ids
+
+    text = _pin_ids(
+        (POLICY_DIR / "llm.yaml").read_text(),
+        "cyse4_multilingual_prompt_injection",
+        ["id_a", "id_b"],
     )
 
     # Untouched by default.
@@ -191,10 +194,10 @@ def test_scanner_form_with_invalid_mode_fails_validation():
 def test_current_form_values_round_trip():
     values = current_form_values(AssetType.LLM, (POLICY_DIR / "llm.yaml").read_text())
     assert values["judge_default_model"] == "qwen35"
-    assert values["gates"]["cyse4_mitre"]["samples"] == 10
+    assert values["gates"]["cyse4_mitre"]["samples"] == 100
     assert values["gates"]["cyse4_mitre"]["metric"] == "accuracy"
     assert values["gates"]["cyse4_mitre"]["enabled"] is True
-    assert values["gates"]["agentdojo"]["weight"] == 0.20
+    assert values["gates"]["agentdojo"]["weight"] == 0.15
     from app.engines.registry import LLM_CHECKS
 
     assert set(values["gates"]) == {c.id for c in LLM_CHECKS}
@@ -203,3 +206,23 @@ def test_current_form_values_round_trip():
     assert scanner["mode"] == "advisory"
     assert scanner["block_on"] == ["critical", "high"]
     assert scanner["severity_rollup_penalty"]["critical"] == 40
+
+
+def test_an_ungated_benchmark_is_offered_at_standard_depth_not_wiring_depth():
+    """Enabling a benchmark must not silently add it at 25 samples.
+
+    The form's `samples` value for an ungated benchmark is what gets written the moment
+    someone ticks it. Defaulting to the registry's small `default_limit` would add a new gate
+    at wiring-check depth, producing a confidence interval far wider than its own threshold.
+    """
+    from app.engines.registry import CHECKS_BY_ID, DEPTH_BY_KEY
+
+    values = current_form_values(AssetType.LLM, (POLICY_DIR / "llm.yaml").read_text())
+    good = DEPTH_BY_KEY["good"]
+    for check_id, row in values["gates"].items():
+        if row["enabled"]:
+            continue
+        expected = good.samples_for(CHECKS_BY_ID[check_id])
+        assert row["samples"] == expected, (
+            f"{check_id} would be enabled at n={row['samples']}, expected n={expected}"
+        )

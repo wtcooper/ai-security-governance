@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Lock, Pin, Save, SlidersHorizontal } from "lucide-react";
 import { PolicySettings } from "../../ui/policy-settings";
+import { ASSET } from "../../ui/vocabulary";
 import {
   createPolicyVersionFromForm,
   type AssetType,
@@ -52,7 +53,7 @@ export function PolicyEditor({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-[15px] font-semibold tracking-tight">
-            {assetType.toUpperCase()} policy v{version.version}
+            {ASSET[assetType].label} policy v{version.version}
           </h2>
           <p className="tnum mt-0.5 text-[11px] text-faint">{version.content_hash}</p>
         </div>
@@ -260,8 +261,80 @@ function LlmForm({
     onSaved(result.data.version);
   }
 
+  const depth = initial.depth_presets ?? [];
+  // Which preset the current numbers correspond to, if any. Editing one gate by hand leaves
+  // this null rather than mislabelling a bespoke configuration as a preset.
+  const activeDepth =
+    depth.find((preset) =>
+      Object.entries(preset.per_check).every(
+        ([id, n]) => gates[id] && Number(gates[id].samples) === n,
+      ),
+    )?.key ?? null;
+
+  function applyDepth(preset: (typeof depth)[number]) {
+    setGates(
+      Object.fromEntries(
+        Object.entries(gates).map(([id, g]) => [
+          id,
+          id in preset.per_check ? { ...g, samples: String(preset.per_check[id]) } : g,
+        ]),
+      ),
+    );
+  }
+
   return (
     <div className="space-y-5">
+      <div className="rounded-card border border-rule bg-surface p-4">
+        <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2">
+          <h3 className="eyebrow">How much to measure</h3>
+          <span className="text-[11px] text-muted">
+            the biggest cost lever, and what separates a wiring check from a signal
+          </span>
+        </div>
+        <div className="mt-3 grid gap-px overflow-hidden rounded border border-rule bg-rule sm:grid-cols-3">
+          {depth.map((preset) => {
+            const isActive = activeDepth === preset.key;
+            return (
+              <button
+                key={preset.key}
+                type="button"
+                onClick={() => applyDepth(preset)}
+                aria-pressed={isActive}
+                className={`space-y-1 p-3 text-left transition-colors ${
+                  isActive ? "bg-ink text-paper" : "bg-surface hover:bg-paper"
+                }`}
+              >
+                <span className="flex items-baseline justify-between gap-2">
+                  <span className="text-[13px] font-medium">{preset.label}</span>
+                  <span className={`tnum text-[11px] ${isActive ? "text-paper/70" : "text-faint"}`}>
+                    {preset.samples == null ? "full datasets" : `n=${preset.samples}`}
+                  </span>
+                </span>
+                <span className="tnum block text-[12px]">
+                  {preset.total_tests.toLocaleString()} tests
+                  <span className={isActive ? "text-paper/70" : "text-faint"}>
+                    {" "}
+                    · ~{preset.total_calls.toLocaleString()} calls
+                  </span>
+                </span>
+                <span
+                  className={`block text-[11px] leading-relaxed ${
+                    isActive ? "text-paper/80" : "text-muted"
+                  }`}
+                >
+                  {preset.blurb}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        {activeDepth === null && (
+          <p className="mt-2 text-[11px] text-muted">
+            Custom sample counts — not one of the presets. Per-benchmark values are below.
+          </p>
+        )}
+      </div>
+
       <div className="rounded-card border border-rule bg-surface p-4">
         <h3 className="eyebrow mb-3">Judge</h3>
         <div className="grid gap-4 sm:grid-cols-2">

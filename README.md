@@ -29,7 +29,7 @@ Two rules shape the design:
 
 | Asset | Evaluation | Gate |
 |---|---|---|
-| **LLM** (open weights or frontier) | 8 security benchmarks via [Inspect AI](https://inspect.aisi.org.uk) — CyberSecEval-4 (×4), AgentDojo, and AgentThreatBench (×3, the OWASP Agentic Top 10) | one threshold per benchmark, on that benchmark's own headline metric |
+| **LLM** (open weights or frontier) | 8 security benchmarks via [Inspect AI](https://inspect.aisi.org.uk) — CyberSecEval-4 (×4), AgentDojo, AgentThreatBench (×3, the OWASP Agentic Top 10) | one threshold per benchmark, on that benchmark's own headline metric |
 | **Open weights** | 5 Hugging Face scanners (protectAI, ClamAV, picklescan, VirusTotal, JFrog), harvested not recomputed | any file any scanner calls unsafe blocks; *not scanned* ≠ safe |
 | **MCP server** | full [`mcp-scanner`](https://github.com/cisco-ai-defense/mcp-scanner) sweep of cloned source or an uploaded zip | severity rule, advisory by default |
 | **Agent skill** | full [`skill-scanner`](https://github.com/cisco-ai-defense/skill-scanner) sweep of cloned source or an uploaded zip | severity rule + the scanner's own verdict, advisory by default |
@@ -37,40 +37,95 @@ Two rules shape the design:
 The LLM suite is deliberately all pure-API or in-memory simulation — no Docker sandboxes — so
 a governance run takes minutes and can be repeated cheaply.
 
-### What may be admitted to the suite
+## The benchmark catalogue
 
-Every benchmark here measures whether an asset **resists** attack. None asks a model to
-produce working exploits, and none needs a network-capable sandbox to verify generated code.
-That excludes an entire class of otherwise-respected cyber benchmarks, deliberately: in July
-2026 an exploit-generation benchmark run with guardrails disabled ended with frontier models
+A governance suite is only defensible if you can say **which risk each benchmark covers** and
+**why everything else was left out**. This catalogue is that statement. It is organised by
+risk dimension rather than by benchmark, because the question that matters is coverage, not
+count — one benchmark per dimension, and no dimension counted twice.
+
+### Dimensions, and what covers each
+
+| # | Risk dimension | What it answers | Covered by | Status |
+|---|---|---|---|---|
+| 1 | **Direct misuse** | Does it help an attacker who simply asks? | `cyse4_mitre` | implemented |
+| 2 | **Over-refusal** | Does safety break legitimate security work? | `cyse4_mitre_frr` | implemented |
+| 3 | **Jailbreak robustness** | Does it hold up under systematic attack transformations? | StrongREJECT | **gap** |
+| 4 | **Injection via content** | Can untrusted text override its instructions? | `cyse4_multilingual_prompt_injection` | implemented |
+| 5 | **Injection via tools** | Can untrusted tool output redirect it mid-task? | `agentdojo` | implemented |
+| 6 | **Persistent-memory poisoning** | Can an injection planted now change a decision later? | `atb_memory_poison` | implemented |
+| 7 | **Harmful agentic tool use** | Will it *act* harmfully for a malicious user? | AgentHarm (+ benign control) | gap, tool-dependent |
+| 8 | **Insecure code** | Does it write vulnerable code in normal use? | `cyse4_instruct`, `cyse4_autocomplete` | half implemented |
+| 9 | **Artifact supply chain** | Is the weights / server / skill code itself hostile? | HF scanners, `mcp-scanner`, `skill-scanner` | implemented |
+| 10 | **Offensive capability** | If safeguards were bypassed, what could it do? | CVE-Bench, CyberGym | sandbox tier — see below |
+
+Dimensions 1–9 are **safeguard** measurements and belong in the gate: a bad result is a reason
+not to onboard. Dimension 10 is different in kind — high capability is not a failure, it is a
+**risk-tiering signal** that should tighten access, isolation and authorization. Conflating the
+two is the single most common mistake in AI cyber evaluation.
+
+### Implemented — the current suite
+
+| Benchmark | Dimension | Metric (direction) | Dataset | Calls/sample | Judge |
+|---|---|---|---|---|---|
+| `cyse4_mitre` | direct misuse | `accuracy` ↑ | 1,000 | 3 | yes + expansion |
+| `cyse4_mitre_frr` | over-refusal | `refusal_rate` ↓ | 750 | 1 | no |
+| `cyse4_multilingual_prompt_injection` | injection via content | `accuracy` ↑ | 1,004 | 2 | yes |
+| `cyse4_instruct` | insecure code (instructed) | `vulnerable_percentage` ↓ | 1,916 | 1 | no — semgrep |
+| `agentdojo` | injection via tools | `security.accuracy` ↑ | 97 tasks / 629 cases | ~6 | no |
+| `atb_memory_poison` | memory poisoning | `security.accuracy` ↑ | 10 | ~4 | no |
+| `atb_autonomy_hijack` | injection via tools *(overlaps #5)* | `security.accuracy` ↑ | 6 | ~4 | no |
+| `atb_data_exfil` | injection via tools *(overlaps #5)* | `security.accuracy` ↑ | 8 | ~4 | no |
+
+Judged CyberSecEval tasks dominate the bill. AgentThreatBench covers three OWASP agentic risks
+over their full datasets in minutes with no judge cost — but see the sample-size caveat under
+[Known limitations](#known-limitations): at n=6 and n=8 a 0.90 threshold is arithmetically a
+zero-tolerance gate.
+
+### Assessed and deliberately not implemented
+
+| Benchmark | Why not |
+|---|---|
+| **Cybench** | Saturated — frontier agents ~93% pass@1, up from 17.5% at launch. A measure everything passes cannot inform a decision. Also sandbox-required. |
+| **CyberMetric, SecQA, WMDP-Cyber** | Multiple-choice knowledge. Near-perfect frontier scores, contamination risk, and knowing more about attacks is not the same as being unsafe to deploy. |
+| **3CB** | 15 challenges with the four hardest withheld. Useful as a MITRE-aligned demonstration; too small to gate on. |
+| **`cyse4_multiturn_phishing`** | Three model calls per sample (subject + victim + judge) over 856 samples — the most expensive item in the family. Persuasion also sits closer to harmful-content, which this tool leaves to compliance by design. |
+| **`cyse4_malware_analysis`, `cyse4_threat_intelligence`** | These measure *defensive usefulness* — can it reason over malware reports and threat intel — which is a capability question, not a safety one. Candidates to record ungated, never to gate. `threat_intelligence` also needs poppler and reachable `web.archive.org`. |
+| **b3** (Backbone Breaker) | Present in the catalogue but raises `ImportError: rouge_score is not installed` as shipped. A 194k-attack corpus is regression testing, not a gate. |
+| **HarmBench** | Not in the Inspect catalogue; general-harm rather than cyber-specific. StrongREJECT covers the same job natively. |
+| **CodeIPI** | Would be valuable for coding agents, but **not present** in the installed catalogue despite being described elsewhere as native. Revisit if it lands. |
+
+### Runnable with caveats — the sandbox tier
+
+These need Docker sandboxes and human supervision. They are **never** part of the automatic
+gate; they answer dimension 10, for risk tiering.
+
+| Benchmark | What it adds | Requirements | Cost per full run |
+|---|---|---|---|
+| **CVE-Bench** | 40 real web-application CVEs, zero-day and one-day modes, automatic exploit verification | Docker; isolated network | ~$25–70 (≈$0.60–1.70/task) |
+| **CyberGym** | 1,507 historical vulnerabilities from 188 projects; proof-of-concept reproduction | Docker; **236 GB** dataset; ~11 h measured for a full level-1 run | ~$3,000 full, ~$600 for a 300-task slice |
+
+### Excluded on safety grounds, not cost
+
+**ExploitGym, SEC-bench Pro and BountyBench are not run here at any tier.** They ask a model
+to *develop working exploits*, and verifying that requires an environment powerful enough to
+be dangerous. In July 2026 an exploit-generation benchmark run with guardrails disabled ended
+with frontier models
 [escaping their sandbox and compromising Hugging Face's production infrastructure](https://huggingface.co/blog/security-incident-july-2026)
 to steal the benchmark's answer key. An asset-onboarding gate has no need to elicit offensive
-capability, so it does not. `tests/test_registry.py` asserts this rather than trusting review.
+capability, so it does not. `tests/test_registry.py::test_no_check_requires_a_sandbox`
+asserts this rather than trusting review to remember it.
 
-Two further exclusions, for a different reason: benchmarks needing Docker sandboxes to score
-real vulnerability work (CyberGym, CVE-Bench) belong to a human-supervised deep-testing tier,
-never the automatic gate; and saturated benchmarks (Cybench at ~93%, CyberMetric, SecQA) are
-left out because a measure everything passes cannot inform a decision.
+If you do adopt the sandbox tier above, the containment requirements are not optional:
+deny-by-default egress, no host filesystem or Docker socket mounts, ephemeral task
+credentials, per-task resource ceilings, and review of any trace containing exploit material.
 
 ### What a run costs
 
 Cost is a registry fact, shown per benchmark and summed per suite in the UI, so a team sees
 the expense before starting rather than discovering it hours in. Model calls is the portable
-unit — wall-clock depends entirely on the backing model.
-
-| Benchmark | Calls / sample | Dataset | Judge | Notes |
-|---|---|---|---|---|
-| `cyse4_multilingual_prompt_injection` | 2 | 1004 | yes | judge is the cost driver |
-| `cyse4_mitre` | 3 | ~1000 | yes (+expansion) | most expensive per sample |
-| `cyse4_mitre_frr` | 1 | ~750 | no | refusal read from the response |
-| `cyse4_instruct` | 1 | 1916 | no | detection is local semgrep |
-| `agentdojo` | ~6 (agent loop) | varies | no | multi-turn |
-| `atb_memory_poison` | ~4 (agent loop) | 10 | no | ~15s/sample measured locally |
-| `atb_autonomy_hijack` | ~4 | 6 | no | full dataset in ~90s locally |
-| `atb_data_exfil` | ~4 | 8 | no | full dataset in ~2 min locally |
-
-The judged CyberSecEval benchmarks dominate the bill; AgentThreatBench gives full-dataset
-coverage of three OWASP agentic risks in minutes with no judge cost at all.
+unit — wall-clock depends entirely on the backing model. The full suite as configured is
+roughly **330 model calls**; the Benchmarks page shows the live figure.
 
 For MCP servers and skills, **the scanner is the evaluation.** No benchmark scores a specific
 server or skill: MCP-Bench, MCP-Universe, MCPSecBench and MCP-SafetyBench all measure how a
@@ -398,6 +453,12 @@ Worth reading before trusting a result:
 - **Thresholds are not calibrated.** They are structurally correct placeholders. Calibrating them
   needs runs against models whose behaviour you actually care about; local models can't stand in.
   It is a policy edit (a new version from the Policies page), not a code change.
+- **Two agentic gates are arithmetically zero-tolerance.** `atb_autonomy_hijack` (n=6) and
+  `atb_data_exfil` (n=8) are gated at 0.90, but 5/6 = 0.83 and 7/8 = 0.875 both fall below it —
+  so only a perfect score passes. That may well be the right bar for data exfiltration, but it
+  should be a decision rather than an artifact of a small dataset meeting a round number. Either
+  state it as a deliberate zero-tolerance gate or lower the threshold to match the dataset's
+  resolution.
 - **MCP and skills run in advisory mode.** They can withhold approval but never grant it, because
   the false-positive baseline is thin — 3 benign MCP servers and 4 safe skills in the vendor
   corpora. Adding benign servers is the prerequisite for `mode: gating`.
@@ -421,14 +482,20 @@ Worth reading before trusting a result:
 
 Ideas, roughly in order of value:
 
+- **Close the two open dimensions** (see the catalogue): add **StrongREJECT** for jailbreak
+  robustness — the one safeguard dimension nothing currently covers, since every injection test
+  here is indirect — and **`cyse4_autocomplete`** for insecure code during completion, which
+  needs no judge at all. Consider retiring `atb_autonomy_hijack` and `atb_data_exfil`, whose
+  threat model AgentDojo already covers over 629 cases rather than 6 and 8.
 - **Calibrate the thresholds** against a funded run of models the org actually uses, and graduate
   MCP/skills out of advisory mode once a benign corpus exists.
 - **Benign MCP corpus** — scan and review a set of well-known public servers to establish the
   false-positive baseline the severity rule is missing.
 - **Local weight scanning** with [`modelaudit`](https://www.promptfoo.dev/docs/model-audit/) for
   repos Hugging Face hasn't scanned, or that are gated or private.
-- **Docker eval tier** — `cyse2_interpreter_abuse`, `cyse2_vulnerability_exploit`, `cybench`,
-  `cve_bench` and AgentDojo's sandbox suites, for the deep-testing path.
+- **A supervised sandbox tier for capability**, most likely **CVE-Bench** alone: 40 real CVEs at
+  roughly $25–70 a run is affordable, where CyberGym's 236 GB and ~11 hours is not. It answers
+  the one dimension the gate cannot, and its result should tier risk rather than pass or fail.
 - **Antares as an extra source analyzer.** Cisco's open-weight vulnerability-localisation models
   are cheap and run locally; note their model card rules them out as a general judge.
 - **Re-run a stored decision under a new policy version** from the UI, so a threshold change

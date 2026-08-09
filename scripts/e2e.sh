@@ -247,15 +247,18 @@ if echo "$CHECKS_OUT" | python3 -c "
 import json,sys
 checks={c['id']: c for c in json.load(sys.stdin)}
 expected={'cyse4_multilingual_prompt_injection','cyse4_mitre','cyse4_mitre_frr',
-          'cyse4_instruct','agentdojo'}
+          'cyse4_instruct','agentdojo',
+          'atb_memory_poison','atb_autonomy_hijack','atb_data_exfil'}
 assert set(checks)==expected, f'registry drift: {set(checks) ^ expected}'
 # Both judged checks must advertise that they need one, or an upstream default takes over.
 assert checks['cyse4_mitre']['needs_judge']
 assert checks['cyse4_multilingual_prompt_injection']['needs_judge']
+# AgentThreatBench scores deterministically; declaring a judge would waste a call per sample.
+assert not checks['atb_memory_poison']['needs_judge']
 # Directions must not have collapsed to one value (a classic copy-paste error).
 assert len({c['direction'] for c in checks.values()})==2
 " 2>/dev/null; then
-    pass "5 benchmarks registered with judge requirements and mixed directions"
+    pass "8 benchmarks registered with judge requirements and mixed directions"
 else
     fail "check registry" "$CHECKS_OUT"
 fi
@@ -267,7 +270,7 @@ d=json.load(sys.stdin)
 # Phase 8: per-class versions + hashes replace the single top-level pair.
 assert all(c['content_hash'] for c in d['classes'].values()), 'policies must be content-hashed'
 assert d['composite_is_display_only'] is True
-assert len(d['llm_gates'])==5, d['llm_gates']
+assert len(d['llm_gates'])==8, d['llm_gates']
 assert all('planned_samples' in g for g in d['llm_gates'].values()), 'gates must carry sample counts'
 assert d['thresholds_are_calibrated'] is False, 'placeholders must be labelled as such'
 " 2>/dev/null; then
@@ -339,12 +342,16 @@ fi
 BENCH_OUT=$(curl -sf --max-time 15 "$BACKEND/api/benchmarks" 2>&1)
 if echo "$BENCH_OUT" | python3 -c "
 import json,sys
-rows=json.load(sys.stdin)
-assert len(rows)==5, len(rows)
+d=json.load(sys.stdin)
+rows=d['benchmarks']
+assert len(rows)==8, len(rows)
 assert all(r['intent'] for r in rows), 'a benchmark has no intent text'
-assert all(r['gate'] for r in rows), 'a benchmark has no active gate'
+assert all(r['cost_note'] for r in rows), 'a benchmark has no cost note'
+# 9.x: no shipped benchmark may require a sandbox (the ExploitGym rule).
+assert not any(r['needs_sandbox'] for r in rows), 'a benchmark requires a sandbox'
+assert d['suite']['estimated_calls'] > 0, d['suite']
 " 2>/dev/null; then
-    pass "8.7 benchmarks endpoint lists all five with intent and active gate"
+    pass "9.1 benchmarks endpoint lists all eight with intent, cost, and no sandbox requirement"
 else
     fail "benchmarks endpoint" "$BENCH_OUT"
 fi
@@ -367,11 +374,11 @@ if [ -n "$RUN_ID" ]; then
     if echo "$PROG_OUT" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
-assert len(d['benchmarks'])==5, d
+assert len(d['benchmarks'])==8, d
 assert all(b['state'] in ('done','running','queued') for b in d['benchmarks']), d
 assert d['sample_override']==$E2E_RUN_LIMIT, d
 " 2>/dev/null; then
-        pass "8.9 progress endpoint reports all five benchmarks and the override"
+        pass "8.9 progress endpoint reports all eight benchmarks and the override"
     else
         fail "run progress endpoint" "$PROG_OUT"
     fi
@@ -396,7 +403,8 @@ assert d['status'] in ('complete','failed'), f\"run did not finish: {d['status']
 gated=[s for s in d['scores'] if s['gated']]
 ids={s['check_id'] for s in gated}
 expected={'cyse4_multilingual_prompt_injection','cyse4_mitre','cyse4_mitre_frr',
-          'cyse4_instruct','agentdojo'}
+          'cyse4_instruct','agentdojo',
+          'atb_memory_poison','atb_autonomy_hijack','atb_data_exfil'}
 assert ids==expected, f'benchmarks without a score: {sorted(expected-ids)}'
 assert all(s['raw_value'] is not None for s in gated), 'a gated score has no value'
 
@@ -427,7 +435,7 @@ print('  composite (display only):', d['composite_score'])
 for s in sorted(gated, key=lambda x: x['check_id']):
     print(f\"    {'pass' if s['passed'] else 'FAIL'}  {s['check_id']}: {s['metric']}={s['raw_value']}\")
 " 2>&1 | tee /tmp/e2e-run-detail.txt | grep -q "decision:"; then
-        pass "all 5 benchmarks scored; decision and judge guard behaved correctly"
+        pass "all 8 benchmarks scored; decision and judge guard behaved correctly"
         sed -n '1,20p' /tmp/e2e-run-detail.txt
     else
         fail "real governance run" "$(cat /tmp/e2e-run-detail.txt 2>/dev/null)"
@@ -455,7 +463,7 @@ r=rows[0]
 assert r['gates_total']==5, r['gates_total']
 assert r['composite_is_display_only'] is True
 " 2>/dev/null; then
-        pass "leaderboard reports the run with a 5-gate denominator"
+        pass "leaderboard reports the run with an 8-gate denominator"
     else
         fail "leaderboard" "$LB_OUT"
     fi

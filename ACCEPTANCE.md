@@ -146,3 +146,17 @@ servers added before `gating`.
 | 8.10 | Orphaned `running`/`pending` runs are failed on backend startup | `tests/test_run_control.py` |
 | 8.11 | Evaluate and Results pages carry an expandable governing-policy view with history link | browser inspection |
 | 8.12 | `pytest` (191) and `npm run build` clean; policy + benchmark endpoints in e2e.sh | this suite |
+
+## Phase 9 — AgentThreatBench, cost transparency, form-only policies
+
+| # | Criterion | How it is verified |
+|---|---|---|
+| 9.1 | Eight benchmarks registered; `/api/benchmarks` carries intent, cost and `needs_sandbox: false` for every one | e2e suite |
+| 9.2 | No shipped benchmark requires a sandbox (the ExploitGym rule), asserted not assumed | `tests/test_registry.py::test_no_check_requires_a_sandbox` |
+| 9.3 | AgentThreatBench declares no judge model, and its scorer declares both `security` and `utility` groups (re-derived from the installed package) | `tests/test_registry.py` ATB tests |
+| 9.4 | Every check declares `calls_per_sample` and a cost note; suite cost is shown before a run | `tests/test_registry.py::test_every_check_declares_its_cost` + Benchmarks page |
+| 9.5 | Only policy-gated benchmarks run; a registered-but-ungated one never burns compute | `jobs.py` filters on `policy.llm_gates`; progress endpoint agrees |
+| 9.6 | The policy form can add and remove benchmarks, taking metric/direction from the registry | `tests/test_policy_form.py` enable/disable tests |
+| 9.7 | Disabling every benchmark is refused rather than saved | `tests/test_policy_form.py::test_disabling_every_gate_is_refused_by_validation` |
+| 9.8 | The UI has no YAML surface: viewing and editing a policy are both form-based | browser inspection; `policy-editor.tsx` has no textarea or `<pre>` of content |
+| 9.9 | `pytest` (215) and `npm run build` clean | this suite |

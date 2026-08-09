@@ -17,6 +17,7 @@ import io
 from pydantic import BaseModel, Field
 from ruamel.yaml import YAML
 
+from app.engines.registry import CHECKS_BY_ID, checks_for
 from app.models import AssetType
 
 
@@ -26,13 +27,22 @@ class GateForm(BaseModel):
     # A pinned core set survives a form edit untouched unless explicitly cleared, because
     # dropping it silently would change what a run measures without anyone deciding that.
     clear_sample_ids: bool = False
+    # Include this benchmark in the suite. A benchmark that is registered in code but not
+    # yet in the policy shows in the form as "available"; enabling it here adds a gate.
+    # Metric and direction come from the registry, never the form — they are facts about
+    # the benchmark, not preferences. Set false to remove a gate from the suite.
+    enabled: bool = True
+    # Composite weight, applied when the gate is enabled. Optional; defaults to a small
+    # value so a newly-added benchmark contributes to the display score without dominating.
+    weight: float = Field(default=0.1, ge=0)
 
 
 class LlmPolicyForm(BaseModel):
     judge_default_model: str = Field(min_length=1)
     judge_max_refusal_rate: float = Field(ge=0, le=1)
+    # Keyed by check id. Includes every registered benchmark; `enabled` says which are in
+    # the suite, and each carries its own composite weight.
     gates: dict[str, GateForm]
-    composite_weights: dict[str, float]
     weights_block_on_unsafe_file: bool
     weights_treat_unscanned_as_pass: bool
 
@@ -66,24 +76,45 @@ def apply_llm_form(current_text: str, form: LlmPolicyForm) -> str:
     judge["max_refusal_rate"] = form.judge_max_refusal_rate
 
     gates = data.setdefault("gates", {})
-    for check_id, gate_form in form.gates.items():
-        # Only known gates are touched; adding a gate is a raw-edit operation because it
-        # needs metric/direction/description, which the form deliberately does not carry
-        # (they are registry facts, not preferences).
-        if check_id not in gates:
-            continue
-        gate = gates[check_id]
-        gate["threshold"] = gate_form.threshold
-        if gate_form.clear_sample_ids and "sample_ids" in gate:
-            del gate["sample_ids"]
-        # `samples` only governs when no core set is pinned, but it is kept current either
-        # way so clearing a pin later falls back to a deliberate number.
-        gate["samples"] = gate_form.samples
-
     weights = data.setdefault("composite_weights", {})
-    for check_id, weight in form.composite_weights.items():
-        if check_id in weights:
-            weights[check_id] = weight
+
+    for check_id, gate_form in form.gates.items():
+        registered = CHECKS_BY_ID.get(check_id)
+        # Only registered benchmarks can be in the suite; an unknown id is ignored rather
+        # than written, so a stale client cannot invent a gate.
+        if registered is None or registered.asset_type is not AssetType.LLM:
+            continue
+
+        if not gate_form.enabled:
+            # Remove from the suite entirely, weight and all. Validation later ensures at
+            # least one gate remains.
+            gates.pop(check_id, None)
+            weights.pop(check_id, None)
+            continue
+
+        gate = gates.get(check_id)
+        if gate is None:
+            # Enabling a benchmark that was not in the policy: add it, taking metric,
+            # direction and description from the REGISTRY (facts, not form input).
+            from ruamel.yaml.comments import CommentedMap
+
+            gate = CommentedMap()
+            gate["metric"] = registered.metric_name
+            gate["direction"] = registered.direction.value
+            gate["threshold"] = gate_form.threshold
+            gate["samples"] = gate_form.samples
+            if registered.description:
+                gate["description"] = registered.description
+            gates[check_id] = gate
+        else:
+            gate["threshold"] = gate_form.threshold
+            if gate_form.clear_sample_ids and "sample_ids" in gate:
+                del gate["sample_ids"]
+            # `samples` only governs when no core set is pinned, but it is kept current
+            # either way so clearing a pin later falls back to a deliberate number.
+            gate["samples"] = gate_form.samples
+
+        weights[check_id] = gate_form.weight
 
     supply = data.setdefault("weights", {})
     supply["block_on_unsafe_file"] = form.weights_block_on_unsafe_file
@@ -116,21 +147,34 @@ def current_form_values(asset_type: AssetType, content: str) -> dict:
     data = yaml.load(content)
     if asset_type is AssetType.LLM:
         judge = data.get("judge") or {}
+        gates = data.get("gates") or {}
+        weights = data.get("composite_weights") or {}
+
+        # Every REGISTERED benchmark appears, enabled or not, so the form can both tune the
+        # active suite and offer benchmarks that are available but not yet in it. Metric,
+        # direction, description, intent and cost come from the registry.
+        rows = {}
+        for check in checks_for(AssetType.LLM):
+            spec = gates.get(check.id) or {}
+            enabled = check.id in gates
+            rows[check.id] = {
+                "enabled": enabled,
+                "metric": check.metric_name,
+                "direction": check.direction.value,
+                "threshold": spec.get("threshold", 0.9),
+                "samples": spec.get("samples", check.default_limit),
+                "sample_ids_count": len(spec.get("sample_ids") or []),
+                "weight": float(weights.get(check.id, 0.1)),
+                "description": check.description,
+                "needs_judge": check.needs_judge,
+                "dataset_max": check.dataset_size or check.default_limit,
+                # So the form can show what a change to `samples` costs, live.
+                "calls_per_sample": check.calls_per_sample,
+            }
         return {
             "judge_default_model": judge.get("default_model", ""),
             "judge_max_refusal_rate": judge.get("max_refusal_rate", 0.05),
-            "gates": {
-                check_id: {
-                    "metric": spec.get("metric"),
-                    "direction": spec.get("direction"),
-                    "threshold": spec.get("threshold"),
-                    "samples": spec.get("samples", 20),
-                    "sample_ids_count": len(spec.get("sample_ids") or []),
-                    "description": str(spec.get("description", "")).strip(),
-                }
-                for check_id, spec in (data.get("gates") or {}).items()
-            },
-            "composite_weights": dict(data.get("composite_weights") or {}),
+            "gates": rows,
             "weights_block_on_unsafe_file": bool(
                 (data.get("weights") or {}).get("block_on_unsafe_file", True)
             ),

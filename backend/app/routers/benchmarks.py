@@ -54,6 +54,7 @@ def _display_preview(preview: dict[str, Any]) -> dict[str, Any]:
 
 def _benchmark_out(check, policy, preview: dict[str, Any] | None) -> dict[str, Any]:
     gate = policy.llm_gates.get(check.id)
+    planned = gate.planned_samples if gate else None
     return {
         "id": check.id,
         "description": check.description,
@@ -62,6 +63,15 @@ def _benchmark_out(check, policy, preview: dict[str, Any] | None) -> dict[str, A
         "direction": check.direction.value,
         "needs_judge": check.needs_judge,
         "strata_key": check.strata_key,
+        # Whether this benchmark is in the active suite. A registered benchmark that the
+        # policy does not gate is available to add but does not run.
+        "enabled": gate is not None,
+        # Cost, so the expectation is visible before a run rather than discovered during one.
+        "calls_per_sample": check.calls_per_sample,
+        "dataset_size": check.dataset_size,
+        "cost_note": check.cost_note,
+        "needs_sandbox": check.needs_sandbox,
+        "estimated_calls": (planned * check.calls_per_sample) if planned else None,
         "gate": (
             {
                 "threshold": gate.threshold,
@@ -79,12 +89,23 @@ def _benchmark_out(check, policy, preview: dict[str, Any] | None) -> dict[str, A
 
 
 @router.get("/benchmarks")
-def list_benchmarks(settings: SettingsDep, session: SessionDep) -> list[dict[str, Any]]:
+def list_benchmarks(settings: SettingsDep, session: SessionDep) -> dict[str, Any]:
     policy = get_active_policy(session)
-    return [
+    rows = [
         _benchmark_out(check, policy, _load_preview(settings, check.id))
         for check in LLM_CHECKS
     ]
+    enabled = [r for r in rows if r["enabled"]]
+    return {
+        "benchmarks": rows,
+        # Suite-level cost expectation for one run under the active policy.
+        "suite": {
+            "enabled_count": len(enabled),
+            "available_count": len(rows) - len(enabled),
+            "estimated_calls": sum(r["estimated_calls"] or 0 for r in enabled),
+            "judged_count": sum(1 for r in enabled if r["needs_judge"]),
+        },
+    }
 
 
 @router.get("/benchmarks/{check_id}")

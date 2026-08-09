@@ -230,7 +230,8 @@ def run_progress(run_id: int, settings: SettingsDep, session: SessionDep) -> dic
     from app.engines.progress import collect_progress
 
     policy = get_active_policy(session)
-    checks = checks_for(AssetType.LLM)
+    # Only policy-gated checks run, so those are the ones to report progress for.
+    checks = tuple(c for c in checks_for(AssetType.LLM) if c.id in policy.llm_gates)
     planned: dict[str, int] = {}
     for check in checks:
         gate = policy.llm_gates.get(check.id)

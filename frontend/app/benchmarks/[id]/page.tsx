@@ -39,6 +39,41 @@ export default async function BenchmarkPage({ params }: { params: Promise<{ id: 
         <p className="max-w-3xl text-[13px] leading-relaxed text-ink/85">{benchmark.intent}</p>
       </section>
 
+      <section className="space-y-2">
+        <h2 className="text-[15px] font-semibold tracking-tight">What it costs</h2>
+        <div className="flex flex-wrap gap-x-8 gap-y-2 rounded-card border border-rule bg-surface px-4 py-3">
+          <div>
+            <div className="eyebrow">Model calls per sample</div>
+            <div className="tnum mt-0.5 text-[13px]">{benchmark.calls_per_sample}</div>
+          </div>
+          <div>
+            <div className="eyebrow">Per run, as configured</div>
+            <div className="tnum mt-0.5 text-[13px]">
+              {benchmark.estimated_calls != null
+                ? `~${benchmark.estimated_calls} calls`
+                : "not in the suite"}
+            </div>
+          </div>
+          <div>
+            <div className="eyebrow">Judge model</div>
+            <div className="mt-0.5 text-[13px]">
+              {benchmark.needs_judge ? "required (doubles the calls)" : "not needed"}
+            </div>
+          </div>
+          <div>
+            <div className="eyebrow">Sandbox</div>
+            <div className="mt-0.5 text-[13px]">
+              {benchmark.needs_sandbox ? "required" : "none — pure API or in-memory"}
+            </div>
+          </div>
+        </div>
+        {benchmark.cost_note && (
+          <p className="max-w-3xl text-[12px] leading-relaxed text-muted">
+            {benchmark.cost_note}
+          </p>
+        )}
+      </section>
+
       <section className="space-y-3">
         <h2 className="text-[15px] font-semibold tracking-tight">Active gate</h2>
         <dl className="grid overflow-hidden rounded-card border border-rule bg-surface sm:grid-cols-4">

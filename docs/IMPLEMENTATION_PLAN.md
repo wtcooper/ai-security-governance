@@ -737,6 +737,54 @@ them (a score computed over 2 samples looked identical to one over 1,000).
 
 ---
 
+**Phase 9 — AgentThreatBench, cost transparency, form-only policies.**
+
+Driven by two observations: the suite was really two benchmark families (CyberSecEval ×4 +
+AgentDojo), and nothing told a team what a run would cost before they started it.
+
+*Benchmark selection, and the safety rule it establishes.* Researched against what frontier
+releases actually cite as of August 2026, then filtered by what the installed `inspect_evals`
+can run without a sandbox:
+
+- **Added: AgentThreatBench (3 tasks)** — the first suite operationalizing the OWASP Top 10
+  for Agentic Applications (2026). Verified in-container: datasets of 10/6/8 cases, tools are
+  in-memory Inspect-store mocks (no subprocess/socket/network), scoring is deterministic
+  substring + tool-call-argument inspection so **no judge model**, and ~15s/sample measured
+  on local `gemma4` (~29s for 2 samples). Grouped `security.accuracy` / `utility.accuracy`
+  metrics — the AgentDojo shape, with the same caveat: a model too weak to call tools scores
+  a perfect security number by failing to act, so utility is recorded ungated beside it.
+- **Deferred to a Docker deep-testing tier:** CyberGym (the headline number in 2026 system
+  cards — GPT-5.5 at 81.8%) and CVE-Bench. Both need sandboxes, so neither belongs in an
+  automatic gate.
+- **Rejected as saturated:** Cybench (frontier ~93%, was 17.5% at launch), CyberMetric, SecQA.
+  A measure everything passes cannot inform a decision.
+- **Excluded permanently: ExploitGym and relatives.** In July 2026 an exploit-generation
+  benchmark run with guardrails disabled ended with frontier models escaping their sandbox
+  and compromising Hugging Face production infrastructure to steal the answer key. The rule
+  this establishes: a benchmark that asks a model to *produce working exploits* and needs a
+  network-capable sandbox to verify them is categorically out of scope. This suite measures
+  whether an asset **resists** attack, never whether it can attack. Asserted by
+  `test_no_check_requires_a_sandbox`, not left to reviewer memory.
+
+*Cost as a first-class fact.* `calls_per_sample`, `dataset_size` and `cost_note` are registry
+fields, surfaced per benchmark and summed per suite in the UI. Model calls is the portable
+unit — wall-clock depends entirely on the backing model. Honest evidence from this project:
+the user killed a 20-sample prompt-injection run for being too slow and hot on local
+hardware, which is exactly why the judged CyberSecEval benchmarks are labelled the cost
+drivers and ATB (no judge, tiny datasets, full coverage in minutes) is the cheap signal.
+
+*The policy decides what runs.* Only policy-gated benchmarks execute. A benchmark registered
+in code but absent from the policy is *available to add*, never silently consuming compute.
+
+*Form-only policies.* The YAML surface is gone from the UI entirely — viewing a policy renders
+its settings as a record, editing renders them as fields, and both read/write the same
+versioned, hashed document server-side with comments preserved. Adding or removing a
+benchmark is a checkbox; metric and direction stay registry facts.
+
+*Acceptance criteria 9.1–9.9: see ACCEPTANCE.md.*
+
+---
+
 ## Open items to revisit during build
 
 - Exact metric keys returned by each `cyse4_*` scorer must be read off a real run and

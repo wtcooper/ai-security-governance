@@ -133,7 +133,11 @@ async def _run_llm_checks(
         hf_repo_id = asset.hf_repo_id
         sample_override = limit_override or run.sample_override
 
-    checks = checks_for(AssetType.LLM)
+    # The policy decides which benchmarks run: only checks it gates are evaluated. A
+    # benchmark registered in code but not gated by the active policy is available to add
+    # (from the policy form) but does not silently run and burn compute until it is.
+    gated_ids = set(policy.llm_gates)
+    checks = tuple(check for check in checks_for(AssetType.LLM) if check.id in gated_ids)
     if only_checks:
         wanted = set(only_checks)
         checks = tuple(check for check in checks if check.id in wanted)
@@ -486,14 +490,20 @@ async def _run_single_check(
 
         # Everything else the benchmark reported, kept for a human digging in and never
         # thresholded. This is what `gated=False` is for.
+        #
+        # The FULL metric key is preserved rather than truncated to its last segment.
+        # Grouped-metric benchmarks (AgentDojo, AgentThreatBench) report `security.stderr`
+        # AND `utility.stderr`, which both truncate to "stderr" — that collision produced
+        # two identically-named rows and, worse, hid `utility.accuracy`, the one metric that
+        # must be readable beside a security score to know whether the model could act at all.
         for key, value in metrics.items():
             if key == check.metric_key or not isinstance(value, (int, float)):
                 continue
             session.add(
                 Score(
                     run_id=run_id,
-                    check_id=f"{check.id}::{key.split('.')[-1]}",
-                    metric=key.split(".")[-1],
+                    check_id=f"{check.id}::{key}",
+                    metric=key,
                     raw_value=float(value),
                     gated=False,
                     provenance=Provenance.SELF_RUN,

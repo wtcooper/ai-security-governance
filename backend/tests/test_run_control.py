@@ -85,3 +85,29 @@ def test_orphaned_runs_are_failed_on_startup(tmp_path):
         # The completed run is untouched.
         untouched = next(r for r in runs if r.status is RunStatus.COMPLETE)
         assert untouched.decision is Decision.NEEDS_DEEP_TESTING
+
+
+def test_grouped_metric_extras_do_not_collide():
+    """Regression: `security.stderr` and `utility.stderr` both truncated to "stderr".
+
+    Grouped-metric benchmarks (AgentDojo, AgentThreatBench) report the same metric name
+    under two groups. Truncating to the last segment produced two identically-named rows and
+    hid `utility.accuracy` — the metric that says whether the model could act at all, which
+    is exactly what a perfect security score has to be read against.
+    """
+    from app.engines.registry import get_check
+
+    check = get_check("atb_memory_poison")
+    metrics = {
+        "security.accuracy": 0.8,
+        "security.stderr": 0.13,
+        "utility.accuracy": 0.3,
+        "utility.stderr": 0.15,
+    }
+    extras = [key for key in metrics if key != check.metric_key]
+    ids = [f"{check.id}::{key}" for key in extras]
+
+    assert len(set(ids)) == len(ids), f"extras collide: {ids}"
+    assert f"{check.id}::utility.accuracy" in ids, "utility must stay identifiable"
+    # The gated metric is not duplicated into the extras.
+    assert f"{check.id}::security.accuracy" not in ids

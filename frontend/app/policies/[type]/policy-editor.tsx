@@ -2,9 +2,8 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { Code, Lock, Pin, Save, SlidersHorizontal } from "lucide-react";
+import { Lock, Pin, Save, SlidersHorizontal } from "lucide-react";
 import {
-  createPolicyVersion,
   createPolicyVersionFromForm,
   type AssetType,
   type LlmFormValues,
@@ -17,11 +16,12 @@ const SEVERITIES = ["critical", "high", "medium", "low", "info"] as const;
 /**
  * Viewing one version; editing only ever means "save as the next version".
  *
- * The form is the primary editor: key settings (thresholds, sample counts, judge, severity
- * rules) as typed fields, applied server-side to the current document with its comments
- * intact. Raw YAML editing remains as the advanced path — it is the only way to add a
- * gate or hand-tune a core set, and some edits are genuinely textual. Both paths run the
- * same server-side validation, and superseded versions open read-only either way.
+ * Settings are the whole interface: typed fields for thresholds, sample counts, which
+ * benchmarks are in the suite, the judge, and the scanner severity rules. There is no YAML
+ * surface — the document remains the storage and audit format, but nobody has to read or
+ * hand-indent it to change a threshold. Edits are applied server-side to the current
+ * document (comments preserved), validated against the benchmark registry, and saved as the
+ * next immutable version. Superseded versions render the same settings, read-only.
  */
 export function PolicyEditor({
   assetType,
@@ -33,8 +33,7 @@ export function PolicyEditor({
   formValues: LlmFormValues | ScannerFormValues | null;
 }) {
   const router = useRouter();
-  const [mode, setMode] = useState<"view" | "form" | "yaml">("view");
-  const [content, setContent] = useState(version.content);
+  const [mode, setMode] = useState<"view" | "form">("view");
   const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -45,18 +44,6 @@ export function PolicyEditor({
     setNote("");
     router.push(`/policies/${assetType}?v=${newVersion}`);
     router.refresh();
-  }
-
-  async function onSaveYaml() {
-    setSaving(true);
-    setError(null);
-    const result = await createPolicyVersion(assetType, content, note);
-    if (!result.ok) {
-      setError(result.error);
-      setSaving(false);
-      return;
-    }
-    onSaved(result.data.version);
   }
 
   return (
@@ -70,25 +57,13 @@ export function PolicyEditor({
         </div>
         {version.is_active ? (
           mode === "view" && (
-            <div className="flex gap-2">
-              <button
-                onClick={() => setMode("form")}
-                className="inline-flex items-center gap-1.5 rounded bg-ink px-3 py-1.5 text-[12px] font-medium text-paper transition-opacity hover:opacity-90"
-              >
-                <SlidersHorizontal size={12} aria-hidden="true" />
-                Edit settings
-              </button>
-              <button
-                onClick={() => {
-                  setContent(version.content);
-                  setMode("yaml");
-                }}
-                className="inline-flex items-center gap-1.5 rounded border border-rule px-3 py-1.5 text-[12px] font-medium text-muted transition-colors hover:border-ink hover:text-ink"
-              >
-                <Code size={12} aria-hidden="true" />
-                Edit raw YAML
-              </button>
-            </div>
+            <button
+              onClick={() => setMode("form")}
+              className="inline-flex items-center gap-1.5 rounded bg-ink px-3 py-1.5 text-[12px] font-medium text-paper transition-opacity hover:opacity-90"
+            >
+              <SlidersHorizontal size={12} aria-hidden="true" />
+              Edit settings
+            </button>
           )
         ) : (
           <span className="flex items-center gap-1.5 text-[12px] text-muted">
@@ -137,38 +112,14 @@ export function PolicyEditor({
         </>
       )}
 
-      {mode === "yaml" && (
-        <div className="space-y-3">
-          <p className="text-[12px] leading-relaxed text-muted">
-            The advanced path: full control of the document, including adding gates and
-            hand-editing core sets. Validated on save exactly like the form.
+      {mode === "view" &&
+        (formValues ? (
+          <ReadOnlySettings assetType={assetType} values={formValues} />
+        ) : (
+          <p className="rounded-card border border-rule bg-surface px-4 py-6 text-center text-[12px] text-muted">
+            Settings for this version could not be read.
           </p>
-          <textarea
-            value={content}
-            onChange={(e) => setContent(e.target.value)}
-            rows={24}
-            spellCheck={false}
-            className="tnum w-full rounded border border-rule bg-surface p-3 text-[12px] leading-relaxed"
-          />
-          <NoteField note={note} setNote={setNote} />
-          <FormError error={error} />
-          <SaveRow
-            saving={saving}
-            nextVersion={version.version + 1}
-            onSave={onSaveYaml}
-            onCancel={() => {
-              setMode("view");
-              setError(null);
-            }}
-          />
-        </div>
-      )}
-
-      {mode === "view" && (
-        <pre className="tnum max-h-[36rem] overflow-auto rounded-card border border-rule bg-surface p-4 text-[12px] leading-relaxed">
-          {version.content}
-        </pre>
-      )}
+        ))}
     </section>
   );
 }
@@ -265,13 +216,14 @@ function LlmForm({
     Object.fromEntries(
       Object.entries(initial.gates).map(([id, g]) => [
         id,
-        { threshold: String(g.threshold), samples: String(g.samples), clearPin: false },
+        {
+          enabled: g.enabled,
+          threshold: String(g.threshold),
+          samples: String(g.samples),
+          weight: String(g.weight),
+          clearPin: false,
+        },
       ]),
-    ),
-  );
-  const [weights, setWeights] = useState(
-    Object.fromEntries(
-      Object.entries(initial.composite_weights).map(([id, w]) => [id, String(w)]),
     ),
   );
   const [blockUnsafe, setBlockUnsafe] = useState(initial.weights_block_on_unsafe_file);
@@ -287,14 +239,13 @@ function LlmForm({
         Object.entries(gates).map(([id, g]) => [
           id,
           {
+            enabled: g.enabled,
             threshold: Number(g.threshold),
             samples: Number(g.samples),
+            weight: Number(g.weight),
             clear_sample_ids: g.clearPin,
           },
         ]),
-      ),
-      composite_weights: Object.fromEntries(
-        Object.entries(weights).map(([id, w]) => [id, Number(w)]),
       ),
       weights_block_on_unsafe_file: blockUnsafe,
       weights_treat_unscanned_as_pass: unscannedPass,
@@ -335,84 +286,126 @@ function LlmForm({
       </div>
 
       <div className="overflow-x-auto rounded-card border border-rule bg-surface">
-        <table className="w-full min-w-[38rem] border-collapse">
+        <table className="w-full min-w-[42rem] border-collapse">
           <thead>
             <tr className="border-b border-rule">
-              <th className="eyebrow px-4 py-2.5 text-left font-medium">Gate</th>
+              <th className="eyebrow px-4 py-2.5 text-left font-medium">In suite</th>
+              <th className="eyebrow px-4 py-2.5 text-left font-medium">Benchmark</th>
               <th className="eyebrow px-4 py-2.5 text-left font-medium">Threshold</th>
               <th className="eyebrow px-4 py-2.5 text-left font-medium">Samples</th>
               <th className="eyebrow px-4 py-2.5 text-left font-medium">Weight</th>
+              <th className="eyebrow px-4 py-2.5 text-left font-medium">Cost</th>
             </tr>
           </thead>
           <tbody>
-            {Object.entries(initial.gates).map(([id, meta]) => (
-              <tr key={id} className="border-b border-rule align-top last:border-0">
-                <td className="px-4 py-3">
-                  <div className="tnum text-[12px] font-medium">{id}</div>
-                  <div className="mt-0.5 text-[11px] text-muted">
-                    {meta.metric} · {meta.direction === "higher_is_better" ? "≥" : "≤"} passes
-                  </div>
-                </td>
-                <td className="px-4 py-3">
-                  <input
-                    value={gates[id].threshold}
-                    onChange={(e) =>
-                      setGates({ ...gates, [id]: { ...gates[id], threshold: e.target.value } })
-                    }
-                    className={fieldClass("w-20")}
-                    aria-label={`${id} threshold`}
-                  />
-                </td>
-                <td className="px-4 py-3">
-                  <input
-                    value={gates[id].samples}
-                    onChange={(e) =>
-                      setGates({
-                        ...gates,
-                        [id]: { ...gates[id], samples: e.target.value.replace(/\D/g, "") },
-                      })
-                    }
-                    className={fieldClass("w-20")}
-                    aria-label={`${id} samples`}
-                  />
-                  {meta.sample_ids_count > 0 && (
-                    <label className="mt-1.5 flex items-center gap-1.5 text-[11px]">
-                      <span className="flex items-center gap-1 font-medium text-pass">
-                        <Pin size={10} aria-hidden="true" />
-                        {meta.sample_ids_count} pinned
-                      </span>
-                      <input
-                        type="checkbox"
-                        checked={gates[id].clearPin}
-                        onChange={(e) =>
-                          setGates({
-                            ...gates,
-                            [id]: { ...gates[id], clearPin: e.target.checked },
-                          })
-                        }
-                      />
-                      <span className="text-muted">unpin core set</span>
-                    </label>
-                  )}
-                </td>
-                <td className="px-4 py-3">
-                  <input
-                    value={weights[id] ?? ""}
-                    onChange={(e) => setWeights({ ...weights, [id]: e.target.value })}
-                    className={fieldClass("w-20")}
-                    aria-label={`${id} composite weight`}
-                  />
-                </td>
-              </tr>
-            ))}
+            {Object.entries(initial.gates).map(([id, meta]) => {
+              const on = gates[id].enabled;
+              const calls = Number(gates[id].samples || 0) * meta.calls_per_sample;
+              return (
+                <tr
+                  key={id}
+                  className={`border-b border-rule align-top last:border-0 ${
+                    on ? "" : "opacity-55"
+                  }`}
+                >
+                  <td className="px-4 py-3">
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      onChange={(e) =>
+                        setGates({ ...gates, [id]: { ...gates[id], enabled: e.target.checked } })
+                      }
+                      aria-label={`include ${id}`}
+                    />
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="tnum text-[12px] font-medium">{id}</div>
+                    <div className="mt-0.5 text-[11px] text-muted">
+                      {meta.metric} · {meta.direction === "higher_is_better" ? "≥" : "≤"} passes
+                      {meta.needs_judge && " · needs judge"}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3">
+                    <input
+                      value={gates[id].threshold}
+                      disabled={!on}
+                      onChange={(e) =>
+                        setGates({ ...gates, [id]: { ...gates[id], threshold: e.target.value } })
+                      }
+                      className={fieldClass("w-20")}
+                      aria-label={`${id} threshold`}
+                    />
+                  </td>
+                  <td className="px-4 py-3">
+                    <input
+                      value={gates[id].samples}
+                      disabled={!on}
+                      onChange={(e) =>
+                        setGates({
+                          ...gates,
+                          [id]: { ...gates[id], samples: e.target.value.replace(/\D/g, "") },
+                        })
+                      }
+                      className={fieldClass("w-20")}
+                      aria-label={`${id} samples`}
+                    />
+                    <div className="tnum mt-0.5 text-[11px] text-faint">
+                      of {meta.dataset_max}
+                    </div>
+                    {meta.sample_ids_count > 0 && (
+                      <label className="mt-1.5 flex items-center gap-1.5 text-[11px]">
+                        <span className="flex items-center gap-1 font-medium text-pass">
+                          <Pin size={10} aria-hidden="true" />
+                          {meta.sample_ids_count} pinned
+                        </span>
+                        <input
+                          type="checkbox"
+                          checked={gates[id].clearPin}
+                          disabled={!on}
+                          onChange={(e) =>
+                            setGates({
+                              ...gates,
+                              [id]: { ...gates[id], clearPin: e.target.checked },
+                            })
+                          }
+                        />
+                        <span className="text-muted">unpin</span>
+                      </label>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    <input
+                      value={gates[id].weight}
+                      disabled={!on}
+                      onChange={(e) =>
+                        setGates({ ...gates, [id]: { ...gates[id], weight: e.target.value } })
+                      }
+                      className={fieldClass("w-20")}
+                      aria-label={`${id} composite weight`}
+                    />
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="tnum text-[12px]">
+                      {on ? `~${calls}` : "—"}
+                      <span className="text-faint"> calls</span>
+                    </div>
+                    <div className="tnum mt-0.5 text-[11px] text-faint">
+                      {meta.calls_per_sample}/sample
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
       <p className="text-[11px] leading-relaxed text-muted">
-        Metric and direction are facts about each benchmark, not preferences — they are not
-        editable here (or in raw YAML: the validator pins them to the registry). Weights
-        order the results table only; they never gate. A pinned core set keeps governing
-        until unpinned, at which point the samples count applies.
+        Unticking a benchmark removes it from the suite; ticking one adds it, taking its
+        metric and direction from the benchmark registry — those are facts about the
+        benchmark, not preferences, so they are never editable. Weights order the results
+        table only; they never gate. A pinned core set keeps governing until unpinned, at
+        which point the samples count applies. Cost is model calls per run, so the expense is
+        visible before starting rather than discovered during.
       </p>
 
       <div className="rounded-card border border-rule bg-surface p-4">
@@ -575,6 +568,167 @@ function ScannerForm({
       <NoteField note={note} setNote={setNote} />
       <FormError error={error} />
       <SaveRow saving={saving} nextVersion={nextVersion} onSave={onSave} onCancel={onCancel} />
+    </div>
+  );
+}
+
+// --- Read-only settings view --------------------------------------------------------------
+
+/**
+ * The same settings a version was saved with, rendered as a record rather than a form.
+ *
+ * This is what "viewing a policy" means now: no YAML surface anywhere in the UI. The
+ * document is still the stored, hashed, versioned artifact — it just is not the interface.
+ */
+function ReadOnlySettings({
+  assetType,
+  values,
+}: {
+  assetType: AssetType;
+  values: LlmFormValues | ScannerFormValues;
+}) {
+  if (assetType === "llm") {
+    const llm = values as LlmFormValues;
+    const enabled = Object.entries(llm.gates).filter(([, g]) => g.enabled);
+    const available = Object.entries(llm.gates).filter(([, g]) => !g.enabled);
+    const totalCalls = enabled.reduce(
+      (sum, [, g]) => sum + g.samples * g.calls_per_sample,
+      0,
+    );
+
+    return (
+      <div className="space-y-5">
+        <dl className="grid overflow-hidden rounded-card border border-rule bg-surface sm:grid-cols-3">
+          {[
+            ["Judge model", llm.judge_default_model],
+            [
+              "Max unresolved verdicts",
+              `${(llm.judge_max_refusal_rate * 100).toFixed(1)}%`,
+            ],
+            ["Estimated cost per run", `~${totalCalls} model calls`],
+          ].map(([label, value], index) => (
+            <div
+              key={label}
+              className={`border-b border-rule px-4 py-3 last:border-b-0 sm:border-b-0 ${
+                index < 2 ? "sm:border-r" : ""
+              }`}
+            >
+              <dt className="eyebrow">{label}</dt>
+              <dd className="tnum mt-1 text-[12px]">{value}</dd>
+            </div>
+          ))}
+        </dl>
+
+        <div className="overflow-x-auto rounded-card border border-rule bg-surface">
+          <table className="w-full min-w-[38rem] border-collapse">
+            <thead>
+              <tr className="border-b border-rule">
+                <th className="eyebrow px-4 py-2.5 text-left font-medium">
+                  Benchmark suite ({enabled.length})
+                </th>
+                <th className="eyebrow px-4 py-2.5 text-left font-medium">Passes when</th>
+                <th className="eyebrow px-4 py-2.5 text-left font-medium">Samples</th>
+                <th className="eyebrow px-4 py-2.5 text-left font-medium">Weight</th>
+                <th className="eyebrow px-4 py-2.5 text-left font-medium">Cost</th>
+              </tr>
+            </thead>
+            <tbody>
+              {enabled.map(([id, gate]) => (
+                <tr key={id} className="border-b border-rule last:border-0">
+                  <td className="px-4 py-3">
+                    <div className="tnum text-[12px] font-medium">{id}</div>
+                    <div className="mt-0.5 max-w-md text-[11px] leading-relaxed text-muted">
+                      {gate.description}
+                    </div>
+                  </td>
+                  <td className="tnum px-4 py-3 text-[12px]">
+                    {gate.metric} {gate.direction === "higher_is_better" ? "≥" : "≤"}{" "}
+                    {gate.threshold}
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className="tnum text-[12px]">{gate.samples}</span>
+                    {gate.sample_ids_count > 0 && (
+                      <span className="ml-1.5 inline-flex items-center gap-0.5 text-[11px] font-medium text-pass">
+                        <Pin size={10} aria-hidden="true" />
+                        pinned
+                      </span>
+                    )}
+                  </td>
+                  <td className="tnum px-4 py-3 text-[12px]">{gate.weight}</td>
+                  <td className="tnum px-4 py-3 text-[12px] text-muted">
+                    ~{gate.samples * gate.calls_per_sample} calls
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {available.length > 0 && (
+          <p className="text-[12px] leading-relaxed text-muted">
+            <span className="font-medium text-ink">Available, not in the suite:</span>{" "}
+            <span className="tnum">{available.map(([id]) => id).join(", ")}</span>. Add one
+            from Edit settings; a benchmark that is not in the suite does not run.
+          </p>
+        )}
+
+        <dl className="grid overflow-hidden rounded-card border border-rule bg-surface sm:grid-cols-2">
+          {[
+            [
+              "Blocks on an unsafe weight file",
+              llm.weights_block_on_unsafe_file ? "yes" : "no",
+            ],
+            [
+              "Treats unscanned repos as passing",
+              llm.weights_treat_unscanned_as_pass ? "yes" : "no",
+            ],
+          ].map(([label, value], index) => (
+            <div
+              key={label}
+              className={`border-b border-rule px-4 py-3 last:border-b-0 sm:border-b-0 ${
+                index < 1 ? "sm:border-r" : ""
+              }`}
+            >
+              <dt className="eyebrow">{label}</dt>
+              <dd className="mt-1 text-[12px]">{value}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+    );
+  }
+
+  const scanner = values as ScannerFormValues;
+  return (
+    <div className="space-y-5">
+      <dl className="grid overflow-hidden rounded-card border border-rule bg-surface sm:grid-cols-3">
+        {[
+          ["Decision mode", scanner.mode],
+          ["Blocks on", scanner.block_on.join(", ")],
+          ["Trusts scanner verdict", scanner.trust_scanner_verdict ? "yes" : "no"],
+        ].map(([label, value], index) => (
+          <div
+            key={label}
+            className={`border-b border-rule px-4 py-3 last:border-b-0 sm:border-b-0 ${
+              index < 2 ? "sm:border-r" : ""
+            }`}
+          >
+            <dt className="eyebrow">{label}</dt>
+            <dd className="tnum mt-1 text-[12px]">{value}</dd>
+          </div>
+        ))}
+      </dl>
+      <div className="rounded-card border border-rule bg-surface px-4 py-3">
+        <div className="eyebrow mb-2">Severity roll-up (orders results; never gates)</div>
+        <div className="flex flex-wrap gap-4">
+          {SEVERITIES.map((severity) => (
+            <span key={severity} className="text-[12px]">
+              <span className="tnum text-muted">{severity}</span>{" "}
+              <span className="tnum">{scanner.severity_rollup_penalty[severity] ?? 0}</span>
+            </span>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

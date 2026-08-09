@@ -35,10 +35,14 @@ def _llm_form(**overrides) -> LlmPolicyForm:
         judge_default_model=base["judge_default_model"],
         judge_max_refusal_rate=base["judge_max_refusal_rate"],
         gates={
-            check_id: GateForm(threshold=g["threshold"], samples=g["samples"])
+            check_id: GateForm(
+                threshold=g["threshold"],
+                samples=g["samples"],
+                enabled=g["enabled"],
+                weight=g["weight"],
+            )
             for check_id, g in base["gates"].items()
         },
-        composite_weights=base["composite_weights"],
         weights_block_on_unsafe_file=base["weights_block_on_unsafe_file"],
         weights_treat_unscanned_as_pass=base["weights_treat_unscanned_as_pass"],
     )
@@ -99,13 +103,61 @@ def test_pinned_core_set_survives_unless_explicitly_cleared():
 
 
 def test_unknown_gate_in_the_form_is_ignored_not_added():
-    """Adding a gate needs registry facts the form does not carry; it must not sneak in."""
+    """Only registered benchmarks can enter the suite; a stale client cannot invent one."""
     text = (POLICY_DIR / "llm.yaml").read_text()
     form = _llm_form()
     form.gates["cyse4_made_up"] = GateForm(threshold=0.5, samples=10)
     edited = apply_llm_form(text, form)
     data = validate_class_content(AssetType.LLM, edited)
     assert "cyse4_made_up" not in data["gates"]
+
+
+def test_enabling_a_registered_benchmark_adds_a_gate_with_registry_facts():
+    """The form carries preferences; metric and direction come from the registry."""
+    from app.engines.registry import get_check
+
+    text = (POLICY_DIR / "llm.yaml").read_text()
+    form = _llm_form()
+    form.gates["atb_data_exfil"].enabled = False
+    without = apply_llm_form(text, form)
+    assert "atb_data_exfil" not in validate_class_content(AssetType.LLM, without)["gates"]
+
+    form2 = _llm_form()
+    form2.gates["atb_data_exfil"].enabled = True
+    form2.gates["atb_data_exfil"].threshold = 0.95
+    form2.gates["atb_data_exfil"].samples = 8
+    form2.gates["atb_data_exfil"].weight = 0.05
+    with_gate = apply_llm_form(without, form2)
+    data = validate_class_content(AssetType.LLM, with_gate)
+
+    gate = data["gates"]["atb_data_exfil"]
+    check = get_check("atb_data_exfil")
+    assert gate["metric"] == check.metric_name
+    assert gate["direction"] == check.direction.value
+    assert gate["threshold"] == 0.95
+    assert gate["samples"] == 8
+    assert data["composite_weights"]["atb_data_exfil"] == 0.05
+
+
+def test_disabling_a_gate_removes_it_and_its_weight():
+    text = (POLICY_DIR / "llm.yaml").read_text()
+    form = _llm_form()
+    form.gates["cyse4_instruct"].enabled = False
+    edited = apply_llm_form(text, form)
+    data = validate_class_content(AssetType.LLM, edited)
+    assert "cyse4_instruct" not in data["gates"]
+    assert "cyse4_instruct" not in data["composite_weights"]
+
+
+def test_disabling_every_gate_is_refused_by_validation():
+    """A policy that measures nothing must not be saveable."""
+    text = (POLICY_DIR / "llm.yaml").read_text()
+    form = _llm_form()
+    for gate in form.gates.values():
+        gate.enabled = False
+    edited = apply_llm_form(text, form)
+    with pytest.raises(Exception, match="no gates"):
+        validate_class_content(AssetType.LLM, edited)
 
 
 def test_scanner_form_flips_mode_and_keeps_comments():
@@ -141,7 +193,11 @@ def test_current_form_values_round_trip():
     assert values["judge_default_model"] == "qwen35"
     assert values["gates"]["cyse4_mitre"]["samples"] == 10
     assert values["gates"]["cyse4_mitre"]["metric"] == "accuracy"
-    assert values["composite_weights"]["agentdojo"] == 0.25
+    assert values["gates"]["cyse4_mitre"]["enabled"] is True
+    assert values["gates"]["agentdojo"]["weight"] == 0.20
+    from app.engines.registry import LLM_CHECKS
+
+    assert set(values["gates"]) == {c.id for c in LLM_CHECKS}
 
     scanner = current_form_values(AssetType.MCP, (POLICY_DIR / "mcp.yaml").read_text())
     assert scanner["mode"] == "advisory"

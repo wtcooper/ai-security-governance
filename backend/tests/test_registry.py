@@ -34,6 +34,11 @@ EXPECTED_METRIC_KEYS = {
     "cyse4_mitre_frr": "refusal_scorer.refusal_rate",
     "cyse4_instruct": "security_scorer.vulnerable_percentage",
     "agentdojo": "security.accuracy",
+    # AgentThreatBench declares GROUPED metrics like AgentDojo, for the same reason: a
+    # security score is only meaningful alongside a utility score.
+    "atb_memory_poison": "security.accuracy",
+    "atb_autonomy_hijack": "security.accuracy",
+    "atb_data_exfil": "security.accuracy",
 }
 
 
@@ -76,9 +81,12 @@ def test_metric_keys_exist_upstream():
         assert hasattr(module, check.function), f"{check.module}.{check.function} is gone"
 
         scorer_name, metric_name = check.metric_key.rsplit(".", 1)
-        # AgentDojo's prefix is a metric GROUP, not a scorer, so there is no symbol to find.
-        if check.id == "agentdojo":
-            assert scorer_name in {"security", "utility"}
+        # For grouped-metric benchmarks (AgentDojo, AgentThreatBench) the prefix is a metric
+        # GROUP declared by the scorer, not a scorer symbol, so there is nothing to import.
+        # The group's existence is verified from the scorer's registry metadata instead —
+        # see test_grouped_metric_benchmarks_declare_their_groups.
+        if scorer_name in {"security", "utility"}:
+            assert _declares_metric_group(check, scorer_name)
             continue
         found = any(
             hasattr(importlib.import_module(f"{check.module}.{sub}"), scorer_name)
@@ -166,3 +174,105 @@ def test_directions_are_not_all_the_same():
 def test_unknown_check_raises_with_a_helpful_message():
     with pytest.raises(KeyError, match="unknown check"):
         get_check("not_a_real_check")
+
+
+# --- AgentThreatBench ---------------------------------------------------------------------
+
+
+ATB_CHECK_IDS = ("atb_memory_poison", "atb_autonomy_hijack", "atb_data_exfil")
+
+
+@pytest.mark.parametrize("check_id", ATB_CHECK_IDS)
+def test_agent_threat_bench_needs_no_judge_model(check_id):
+    """Its scoring is deterministic, so no judge is resolved and none must be declared.
+
+    Declaring a judge it does not need would waste a model call per sample; failing to
+    declare one it DOES need would send traffic off-gateway. Read from the scorer: it does
+    substring and tool-call-argument checks only.
+    """
+    check = get_check(check_id)
+    assert not check.needs_judge
+    assert check.model_kwargs == ()
+    assert check.model_roles == ()
+
+
+@pytest.mark.parametrize("check_id", ATB_CHECK_IDS)
+def test_agent_threat_bench_records_utility_alongside_security(check_id):
+    """The AgentDojo caveat applies identically here.
+
+    A model too weak to call tools scores a PERFECT security number by failing to act. The
+    gate reads security, so utility has to be visible next to it — which happens
+    automatically because every non-gated metric a benchmark reports is stored ungated.
+    """
+    check = get_check(check_id)
+    assert check.metric_key == "security.accuracy"
+    assert check.direction is Direction.HIGHER_IS_BETTER
+
+
+def _declared_metric_groups(check) -> set[str]:
+    """The metric GROUPS a task's scorer declares, read from Inspect's registry metadata.
+
+    Grouped metrics are declared via `@scorer(metrics={"security": [...], "utility": [...]})`,
+    which Inspect records in the scorer's registry info rather than as an attribute on the
+    returned function — so this is the only place the group names actually exist.
+    """
+    from inspect_ai._util.registry import registry_info
+
+    builder = getattr(importlib.import_module(check.module), check.function)
+    task = builder(**check.task_kwargs)
+    scorers = task.scorer if isinstance(task.scorer, list) else [task.scorer]
+    groups: set[str] = set()
+    for scorer in scorers:
+        metrics = (registry_info(scorer).metadata or {}).get("metrics")
+        # Two shapes are both legal and both in use: ATB declares `metrics={...}` (a dict of
+        # groups), AgentDojo declares `metrics=[{...}]` (a list containing one). Handle both
+        # rather than assuming — this difference is exactly what a rename would hide.
+        candidates = metrics if isinstance(metrics, list) else [metrics]
+        for candidate in candidates:
+            if isinstance(candidate, dict):
+                groups |= set(candidate)
+    return groups
+
+
+def _declares_metric_group(check, group: str) -> bool:
+    return group in _declared_metric_groups(check)
+
+
+@pytest.mark.parametrize("check_id", ATB_CHECK_IDS)
+def test_agent_threat_bench_scorer_declares_both_metric_groups(check_id):
+    """Re-derived from the installed package, so an upstream rename fails here."""
+    groups = _declared_metric_groups(get_check(check_id))
+    assert {"security", "utility"} <= groups, f"{check_id} groups changed: {groups}"
+
+
+@pytest.mark.parametrize("check_id", ATB_CHECK_IDS)
+def test_agent_threat_bench_needs_no_sandbox(check_id):
+    """The safety property that admits this benchmark at all.
+
+    Its tools are in-memory mocks over Inspect's store. If an upstream version ever
+    introduces a real sandbox, this project must reconsider the benchmark rather than
+    inherit the change silently.
+    """
+    check = get_check(check_id)
+    builder = getattr(importlib.import_module(check.module), check.function)
+    task = builder(**check.task_kwargs)
+    assert getattr(task, "sandbox", None) is None
+    assert check.needs_sandbox is False
+
+
+def test_every_check_declares_its_cost():
+    """Cost has to be knowable before a run, so it is a required registry fact."""
+    for check in LLM_CHECKS:
+        assert check.calls_per_sample >= 1, check.id
+        assert check.cost_note, f"{check.id} has no cost note"
+
+
+def test_no_check_requires_a_sandbox():
+    """The ExploitGym rule, asserted rather than trusted.
+
+    Every shipped benchmark measures resistance to attack and runs pure-API or as an
+    in-memory simulation. A benchmark needing a network-capable sandbox to verify generated
+    exploits belongs to the human-supervised deep-testing tier, never the automatic gate.
+    """
+    for check in LLM_CHECKS:
+        assert check.needs_sandbox is False, check.id

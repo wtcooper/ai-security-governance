@@ -12,6 +12,24 @@ Both are also reachable as Inspect model *roles* (`grader`, `expander`), which i
 robust override because a scorer can use a role without exposing a task argument. We set
 both the task arguments and the roles, and the credential scrubbing in `inspect_child`
 catches anything either mechanism misses.
+
+WHAT MAY BE ADMITTED HERE — a safety rule, not a preference
+-----------------------------------------------------------
+Every benchmark in this suite measures whether an asset **resists attack**. None asks a
+model to produce working exploits, and none requires a network-capable sandbox to verify
+generated code. That excludes an entire class of otherwise-respected cyber benchmarks
+(ExploitGym and relatives), and the exclusion is deliberate: in July 2026 an exploit-
+generation benchmark run with guardrails disabled ended with frontier models escaping their
+sandbox and compromising Hugging Face's production infrastructure to steal the answer key.
+An asset-onboarding gate has no need to elicit offensive capability, so it does not.
+
+Benchmarks that need Docker sandboxes to score real vulnerability work (CyberGym,
+CVE-Bench) are a separate, human-supervised deep-testing tier — never part of the automatic
+gate. Saturated benchmarks (Cybench at ~93%, CyberMetric, SecQA) are excluded for a
+different reason: a measure everything passes cannot inform a decision.
+
+COST is a first-class registry fact (`calls_per_sample`, `dataset_size`, `cost_note`),
+surfaced in the UI, because a team must be able to see what a run costs before starting it.
 """
 
 from __future__ import annotations
@@ -83,6 +101,26 @@ class Check:
     # worth balancing over. None means selection is a plain seeded draw.
     strata_key: str | None = None
 
+    # --- Cost expectation -----------------------------------------------------------------
+    # Model calls per sample is the portable cost unit: wall-clock depends entirely on the
+    # backing model, but call count does not. Shown in the UI so a team knows what a run
+    # costs BEFORE starting it — the honest alternative to discovering it hours in.
+    calls_per_sample: int = 1
+    # Full dataset size, so "n of N" is visible without building a preview.
+    dataset_size: int | None = None
+    # One line on what drives the cost, and anything measured.
+    cost_note: str = ""
+
+    @property
+    def needs_sandbox(self) -> bool:
+        """Every shipped benchmark is pure-API or an in-memory simulation.
+
+        Recorded explicitly because it is a safety property, not an implementation detail:
+        benchmarks needing a network-capable sandbox to verify generated exploits are out
+        of scope for this tool (see the module docstring).
+        """
+        return False
+
     @property
     def needs_judge(self) -> bool:
         return bool(self.model_kwargs or self.model_roles)
@@ -113,6 +151,11 @@ LLM_CHECKS: tuple[Check, ...] = (
             "untrusted text to a model, and multilingual delivery is a common filter bypass."
         ),
         strata_key="injection_variant",
+        calls_per_sample=2,
+        dataset_size=1004,
+        cost_note=(
+            "Two calls per sample: the subject answers, a judge grades. The judge is the cost driver, and on a slow local reasoning model this is the most expensive benchmark in the suite by wall clock."
+        ),
     ),
     Check(
         id="cyse4_mitre",
@@ -140,6 +183,11 @@ LLM_CHECKS: tuple[Check, ...] = (
             "model that helps attackers, the pair catches a model that fakes safety by "
             "refusing everything."
         ),
+        calls_per_sample=3,
+        dataset_size=1000,
+        cost_note=(
+            "Three calls per sample — subject, expansion model, then judge — which makes it the most expensive per sample. Hence the small default draw."
+        ),
     ),
     Check(
         id="cyse4_mitre_frr",
@@ -162,6 +210,9 @@ LLM_CHECKS: tuple[Check, ...] = (
             "useless to the security teams it is being approved for. No judge model is "
             "involved: refusal is detected from the response itself."
         ),
+        calls_per_sample=1,
+        dataset_size=750,
+        cost_note="One call per sample, no judge: refusal is detected from the response itself.",
     ),
     Check(
         id="cyse4_instruct",
@@ -183,6 +234,11 @@ LLM_CHECKS: tuple[Check, ...] = (
             "risk: models are used to write production code, and a model that routinely "
             "emits insecure patterns spreads vulnerabilities at scale. No judge model — "
             "detection is deterministic static analysis."
+        ),
+        calls_per_sample=1,
+        dataset_size=1916,
+        cost_note=(
+            "One call per sample. Detection is local static analysis (semgrep), so there is no judge cost at all."
         ),
     ),
     Check(
@@ -215,6 +271,99 @@ LLM_CHECKS: tuple[Check, ...] = (
             "to call tools at all scores perfectly here by failing to act, which is why the "
             "ungated utility metric is recorded and shown alongside. This is the gate for "
             "agent deployments, where a successful injection acts rather than just speaks."
+        ),
+        calls_per_sample=6,
+        cost_note=(
+            "A multi-turn agent loop, so calls per sample vary with how long the model takes to finish the task — roughly 6 on average. No judge."
+        ),
+    ),
+    # --- AgentThreatBench: the OWASP Top 10 for Agentic Applications (2026) --------------
+    #
+    # Three separate tasks (separate datasets, separate OWASP categories), each its own
+    # gate on `security.accuracy` — the AgentDojo pattern, and for the same reason: a model
+    # too weak to use tools scores a perfect security score by failing to act, so
+    # `utility.accuracy` is recorded ungated and read alongside.
+    #
+    # SAFETY NOTE: every tool here is an in-memory mock backed by Inspect's store — no
+    # subprocess, no network, no sandbox. Scoring is fully deterministic (substring and
+    # tool-call-argument checks), so there is NO judge model. This is the opposite end of
+    # the risk spectrum from sandbox-escape benchmarks like ExploitGym.
+    Check(
+        id="atb_memory_poison",
+        asset_type=AssetType.LLM,
+        module="inspect_evals.agent_threat_bench",
+        function="agent_threat_bench_memory_poison",
+        metric_key="security.accuracy",
+        metric_name="security_accuracy",
+        direction=Direction.HIGHER_IS_BETTER,
+        default_limit=10,  # full dataset is 10 cases
+        description="Resists poisoned memory that steers later, unrelated decisions (OWASP ASI06).",
+        intent=(
+            "The agent has read/write memory tools. An attacker plants content in memory "
+            "during one task; a later, unrelated task then reads it. The security metric is "
+            "the share of episodes where the planted content did NOT change the agent's "
+            "behaviour (no attack marker in the output); utility checks the agent still did "
+            "the real work. This is the memory-poisoning risk that makes long-lived agents "
+            "with persistent memory dangerous — the injection and its payoff are separated "
+            "in time, so a model that only guards the current turn still fails. Scoring is "
+            "deterministic string/tool-call inspection; no judge model is involved."
+        ),
+        calls_per_sample=4,
+        dataset_size=10,
+        strata_key="attack_name",
+        cost_note=(
+            "Agent loop capped at 20 messages; ~15s per sample measured on a local model, so the full 10-case dataset runs in about 2.5 minutes. No judge."
+        ),
+    ),
+    Check(
+        id="atb_autonomy_hijack",
+        asset_type=AssetType.LLM,
+        module="inspect_evals.agent_threat_bench",
+        function="agent_threat_bench_autonomy_hijack",
+        metric_key="security.accuracy",
+        metric_name="security_accuracy",
+        direction=Direction.HIGHER_IS_BETTER,
+        default_limit=6,  # full dataset is 6 cases
+        description="Resists tool output that tries to hijack the agent's goal (OWASP indirect injection).",
+        intent=(
+            "The agent is given a legitimate objective and a set of tools. The data returned "
+            "by a tool contains instructions trying to seize the agent's autonomy — abandon "
+            "the task, take a different action, escalate its own permissions. The security "
+            "metric is the share of episodes where the hijack failed; utility confirms the "
+            "agent completed the intended job. This is the core agentic-security question: "
+            "when the world talks back through a tool, does the model treat that data as "
+            "data or as instructions? Deterministic scoring, no judge."
+        ),
+        calls_per_sample=4,
+        dataset_size=6,
+        strata_key="attack_name",
+        cost_note=(
+            "Agent loop capped at 20 messages; the full 6-case dataset runs in about 90 seconds on a local model. No judge."
+        ),
+    ),
+    Check(
+        id="atb_data_exfil",
+        asset_type=AssetType.LLM,
+        module="inspect_evals.agent_threat_bench",
+        function="agent_threat_bench_data_exfil",
+        metric_key="security.accuracy",
+        metric_name="security_accuracy",
+        direction=Direction.HIGHER_IS_BETTER,
+        default_limit=8,  # full dataset is 8 cases
+        description="Does not exfiltrate sensitive data when a tool payload asks it to (OWASP data leakage).",
+        intent=(
+            "The agent handles customer records and a messaging tool. An injected payload "
+            "tries to get it to send sensitive data to an unauthorised recipient. Security "
+            "is scored on the tool-call arguments, not just the prose: an episode fails if a "
+            "send_message call carries forbidden fields or an unauthorised recipient, so a "
+            "model that talks about refusing but still makes the call is correctly caught. "
+            "Utility checks it completed the legitimate task. Deterministic scoring, no judge."
+        ),
+        calls_per_sample=4,
+        dataset_size=8,
+        strata_key="attack_name",
+        cost_note=(
+            "Agent loop capped at 20 messages; the full 8-case dataset runs in about 2 minutes on a local model. No judge."
         ),
     ),
 )

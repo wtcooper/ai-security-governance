@@ -29,13 +29,48 @@ Two rules shape the design:
 
 | Asset | Evaluation | Gate |
 |---|---|---|
-| **LLM** (open weights or frontier) | 5 CyberSecEval-4 / AgentDojo benchmarks via [Inspect AI](https://inspect.aisi.org.uk) | one threshold per benchmark, on that benchmark's own headline metric |
+| **LLM** (open weights or frontier) | 8 security benchmarks via [Inspect AI](https://inspect.aisi.org.uk) — CyberSecEval-4 (×4), AgentDojo, and AgentThreatBench (×3, the OWASP Agentic Top 10) | one threshold per benchmark, on that benchmark's own headline metric |
 | **Open weights** | 5 Hugging Face scanners (protectAI, ClamAV, picklescan, VirusTotal, JFrog), harvested not recomputed | any file any scanner calls unsafe blocks; *not scanned* ≠ safe |
 | **MCP server** | full [`mcp-scanner`](https://github.com/cisco-ai-defense/mcp-scanner) sweep of cloned source or an uploaded zip | severity rule, advisory by default |
 | **Agent skill** | full [`skill-scanner`](https://github.com/cisco-ai-defense/skill-scanner) sweep of cloned source or an uploaded zip | severity rule + the scanner's own verdict, advisory by default |
 
-The LLM suite is deliberately all pure-API — no Docker sandboxes — so a governance run takes
-minutes and can be repeated cheaply.
+The LLM suite is deliberately all pure-API or in-memory simulation — no Docker sandboxes — so
+a governance run takes minutes and can be repeated cheaply.
+
+### What may be admitted to the suite
+
+Every benchmark here measures whether an asset **resists** attack. None asks a model to
+produce working exploits, and none needs a network-capable sandbox to verify generated code.
+That excludes an entire class of otherwise-respected cyber benchmarks, deliberately: in July
+2026 an exploit-generation benchmark run with guardrails disabled ended with frontier models
+[escaping their sandbox and compromising Hugging Face's production infrastructure](https://huggingface.co/blog/security-incident-july-2026)
+to steal the benchmark's answer key. An asset-onboarding gate has no need to elicit offensive
+capability, so it does not. `tests/test_registry.py` asserts this rather than trusting review.
+
+Two further exclusions, for a different reason: benchmarks needing Docker sandboxes to score
+real vulnerability work (CyberGym, CVE-Bench) belong to a human-supervised deep-testing tier,
+never the automatic gate; and saturated benchmarks (Cybench at ~93%, CyberMetric, SecQA) are
+left out because a measure everything passes cannot inform a decision.
+
+### What a run costs
+
+Cost is a registry fact, shown per benchmark and summed per suite in the UI, so a team sees
+the expense before starting rather than discovering it hours in. Model calls is the portable
+unit — wall-clock depends entirely on the backing model.
+
+| Benchmark | Calls / sample | Dataset | Judge | Notes |
+|---|---|---|---|---|
+| `cyse4_multilingual_prompt_injection` | 2 | 1004 | yes | judge is the cost driver |
+| `cyse4_mitre` | 3 | ~1000 | yes (+expansion) | most expensive per sample |
+| `cyse4_mitre_frr` | 1 | ~750 | no | refusal read from the response |
+| `cyse4_instruct` | 1 | 1916 | no | detection is local semgrep |
+| `agentdojo` | ~6 (agent loop) | varies | no | multi-turn |
+| `atb_memory_poison` | ~4 (agent loop) | 10 | no | ~15s/sample measured locally |
+| `atb_autonomy_hijack` | ~4 | 6 | no | full dataset in ~90s locally |
+| `atb_data_exfil` | ~4 | 8 | no | full dataset in ~2 min locally |
+
+The judged CyberSecEval benchmarks dominate the bill; AgentThreatBench gives full-dataset
+coverage of three OWASP agentic risks in minutes with no judge cost at all.
 
 For MCP servers and skills, **the scanner is the evaluation.** No benchmark scores a specific
 server or skill: MCP-Bench, MCP-Universe, MCPSecBench and MCP-SafetyBench all measure how a
@@ -176,6 +211,14 @@ past decision. The YAML files under `backend/policy/` only seed an empty databas
 Each LLM gate also sets how many samples run — either `samples: N` (the dataset's first N) or a
 pinned `sample_ids:` **core set**: a stratified, seeded selection proposed from a benchmark's
 page and adopted as a policy edit, so every run measures exactly the same test cases.
+
+Policies are edited entirely through **forms** — thresholds, sample counts, which benchmarks
+are in the suite, the judge, and the scanner severity rules. There is no YAML surface in the
+UI: the document stays the stored, hashed, versioned artifact, but nobody has to hand-indent
+it to change a threshold. Ticking a benchmark in or out of the suite is a checkbox; its metric
+and direction come from the benchmark registry and are never editable, because they are facts
+about the benchmark rather than preferences. **Only benchmarks in the suite run** — one
+registered but not enabled is available to add and never silently consumes compute.
 
 ### Graduating MCP/skills out of advisory mode
 

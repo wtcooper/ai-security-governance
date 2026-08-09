@@ -68,6 +68,10 @@ class ScannerPolicy:
     block_on: frozenset[Severity]
     trust_scanner_verdict: bool
     severity_penalty: dict[Severity, int] = field(default_factory=dict)
+    # How many source files the behavioral analyzer examines in one scan. Governed rather than
+    # hard-coded: it trades assessment coverage against wall clock, which is a decision for
+    # whoever owns the policy, not a constant chosen during development.
+    max_source_files: int = 200
 
     @property
     def is_advisory(self) -> bool:
@@ -226,7 +230,15 @@ def _parse_scanner_doc(asset_type: AssetType, text: str) -> dict[str, Any]:
     what = f"{asset_type.value} policy"
     data = _require_mapping(yaml.safe_load(text), what)
     _reject_unknown_keys(
-        data, {"mode", "block_on", "trust_scanner_verdict", "severity_rollup_penalty"}, what
+        data,
+        {
+            "mode",
+            "block_on",
+            "trust_scanner_verdict",
+            "severity_rollup_penalty",
+            "max_source_files",
+        },
+        what,
     )
 
     mode = data.get("mode", "advisory")
@@ -238,6 +250,12 @@ def _parse_scanner_doc(asset_type: AssetType, text: str) -> dict[str, Any]:
     if not isinstance(block_on, list) or not block_on or not set(block_on) <= valid:
         raise PolicyValidationError(
             f"{what}: block_on must be a non-empty list drawn from {sorted(valid)}, got {block_on!r}"
+        )
+
+    cap = data.get("max_source_files", 200)
+    if not isinstance(cap, int) or isinstance(cap, bool) or cap < 1:
+        raise PolicyValidationError(
+            f"{what}: max_source_files must be a positive integer, got {cap!r}"
         )
 
     penalty = _require_mapping(data.get("severity_rollup_penalty") or {}, "severity_rollup_penalty")
@@ -287,6 +305,7 @@ def _scanner_from_data(data: dict[str, Any]) -> ScannerPolicy:
             Severity(k): int(v)
             for k, v in (data.get("severity_rollup_penalty") or {}).items()
         },
+        max_source_files=int(data.get("max_source_files", 200)),
     )
 
 

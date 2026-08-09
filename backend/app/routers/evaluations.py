@@ -70,7 +70,7 @@ def evaluations(
     asset_type: AssetType,
     settings: SettingsDep,
     session: SessionDep,
-    limit: int = 100,
+    limit: int = 500,
 ) -> list[EvaluationRow]:
     statement = (
         select(Run, Asset)

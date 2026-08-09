@@ -224,7 +224,11 @@ async def _run_scanner_checks(settings: Settings, run_id: int, asset_type: Asset
         return
 
     if asset_type is AssetType.MCP:
-        result = await mcp_scanner.scan_source(settings, acquired.path)
+        result = await mcp_scanner.scan_source(
+            settings,
+            acquired.path,
+            max_source_files=policy.scanner[asset_type].max_source_files,
+        )
         scanner_safe = result.scanner_says_safe
     else:
         result = await skill_scanner.scan_skill(settings, acquired.path)

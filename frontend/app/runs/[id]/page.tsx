@@ -279,7 +279,12 @@ function Findings({ run }: { run: Run }) {
                 </div>
                 {finding.detail && (
                   <p className="mt-1.5 text-[12px] leading-relaxed text-muted">
-                    {finding.detail.slice(0, 400)}
+                    {/* Findings are stored to 4,000 characters; the full text is always in
+                        the run's scanner artifact. 400 was cutting real threat summaries
+                        mid-sentence, which hid the reasoning a reviewer needs. */}
+                    {finding.detail.length > 1500
+                      ? `${finding.detail.slice(0, 1500)}… (full text in the scanner artifact)`
+                      : finding.detail}
                   </p>
                 )}
                 <div className="mt-1.5 flex flex-wrap gap-x-3 text-[11px] text-faint">

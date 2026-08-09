@@ -530,6 +530,7 @@ function ScannerForm({
   const [mode, setMode] = useState(initial.mode);
   const [blockOn, setBlockOn] = useState<string[]>(initial.block_on);
   const [trust, setTrust] = useState(initial.trust_scanner_verdict);
+  const [maxFiles, setMaxFiles] = useState(String(initial.max_source_files));
   const [penalty, setPenalty] = useState(
     Object.fromEntries(SEVERITIES.map((s) => [s, String(initial.severity_rollup_penalty[s] ?? 0)])),
   );
@@ -541,6 +542,7 @@ function ScannerForm({
       mode,
       block_on: blockOn,
       trust_scanner_verdict: trust,
+      max_source_files: Number(maxFiles),
       severity_rollup_penalty: Object.fromEntries(
         Object.entries(penalty).map(([s, v]) => [s, Number(v)]),
       ),
@@ -617,6 +619,26 @@ function ScannerForm({
         <label className="mt-3 flex items-center gap-2 text-[12px]">
           <input type="checkbox" checked={trust} onChange={(e) => setTrust(e.target.checked)} />
           Honour the scanner&apos;s own overall verdict where it has one
+        </label>
+      </div>
+
+      <div className="rounded-card border border-rule bg-surface p-4">
+        <h3 className="eyebrow mb-1">Assessment coverage</h3>
+        <p className="mb-3 max-w-2xl text-[11px] leading-relaxed text-muted">
+          Source files the behavioral analyzer examines per scan. It makes one model call per
+          file, so this trades coverage against wall clock. Anything beyond the cap is reported
+          as a finding whose severity reflects how much went unexamined — never as a clean
+          result. Submitting one server directory rather than a whole monorepo is usually
+          better than raising this.
+        </p>
+        <label className="flex items-center gap-2 text-[12px]">
+          <input
+            value={maxFiles}
+            onChange={(e) => setMaxFiles(e.target.value.replace(/\D/g, ""))}
+            className={fieldClass("w-24")}
+            aria-label="max source files"
+          />
+          <span className="text-muted">files per scan</span>
         </label>
       </div>
 

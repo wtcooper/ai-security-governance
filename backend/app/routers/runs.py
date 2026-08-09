@@ -173,7 +173,7 @@ def list_runs(
     settings: SettingsDep,
     session: SessionDep,
     asset_type: AssetType | None = None,
-    limit: int = 50,
+    limit: int = 500,
 ) -> list[RunOut]:
     statement = select(Run, Asset).join(Asset, Asset.id == Run.asset_id)
     if asset_type is not None:

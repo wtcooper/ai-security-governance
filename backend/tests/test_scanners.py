@@ -398,3 +398,69 @@ def test_relevance_ranking_deprioritises_tests():
     from app.engines.mcp_scanner import _mcp_relevance
 
     assert _mcp_relevance(Path("/x/tests/thing.spec.ts")) < _mcp_relevance(Path("/x/src/lib.ts"))
+
+
+# --- limits are governed, not hard-coded ---------------------------------------------------
+
+
+def test_the_file_cap_comes_from_policy_and_covers_a_normal_submission():
+    """The cap was 40, chosen because it was fast enough during development.
+
+    That silently under-scanned every real repository, and the resulting "no findings" was
+    indistinguishable from a clean one. It is now a policy setting for both scanner classes, so
+    the coverage-versus-time trade-off is a governed decision, and the default is high enough
+    that a single server or skill submitted on its own is covered in full.
+    """
+    from pathlib import Path
+
+    from app.engines.mcp_scanner import DEFAULT_MAX_SOURCE_FILES
+    from app.models import AssetType
+    from app.scoring.policy import load_policy_dir
+
+    policy = load_policy_dir(Path(__file__).resolve().parents[1] / "policy")
+    for asset_type in (AssetType.MCP, AssetType.SKILL):
+        cap = policy.scanner[asset_type].max_source_files
+        assert cap == DEFAULT_MAX_SOURCE_FILES
+        assert cap >= 150, f"{asset_type.value} cap {cap} is too low to cover a real server"
+
+
+def test_coverage_shortfall_severity_scales_with_how_much_was_missed():
+    """Missing 60% of a tree is not the same finding as missing 5%."""
+    from app.models import Severity
+
+    def severity_for(missed_share: float) -> Severity:
+        return (
+            Severity.HIGH
+            if missed_share >= 0.5
+            else Severity.MEDIUM
+            if missed_share >= 0.2
+            else Severity.LOW
+        )
+
+    # The real context7 case: 40 of 106 scanned, so 62% unexamined.
+    assert severity_for(66 / 106) is Severity.HIGH
+    assert severity_for(0.3) is Severity.MEDIUM
+    assert severity_for(0.05) is Severity.LOW
+
+
+def test_no_whole_directory_class_is_silently_excluded_from_scanning():
+    """`tests` used to be skipped outright, making submitted code invisible.
+
+    Only directories that are not the submission's own code belong here: version control,
+    vendored dependencies, build output, virtualenvs. Relevance ranking already sorts test code
+    to the back of a capped scan, so excluding it bought nothing and created a blind spot.
+    """
+    from app.engines.mcp_scanner import SKIP_DIRS
+
+    assert "tests" not in SKIP_DIRS
+    assert "test" not in SKIP_DIRS
+    # The legitimate exclusions are still in place.
+    assert {".git", "node_modules", "dist", "build"} <= SKIP_DIRS
+
+
+def test_source_selection_covers_more_than_two_languages():
+    """A Go or Rust MCP server previously had no selectable source files at all."""
+    from app.engines.mcp_scanner import SOURCE_SUFFIXES
+
+    for suffix in (".py", ".ts", ".js", ".go", ".rs", ".rb", ".java", ".sh", ".cs"):
+        assert suffix in SOURCE_SUFFIXES, suffix

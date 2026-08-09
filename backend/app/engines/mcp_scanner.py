@@ -45,6 +45,15 @@ from app.models import Severity
 # mcp-scanner severities, uppercase in JSON output, mapped onto ours. UNKNOWN becomes LOW
 # rather than being dropped: an analyzer that flagged something it could not classify is still
 # telling us something.
+# Files the behavioral analyzer will examine in one scan, unless the policy says otherwise.
+#
+# Where the number comes from: the analyzer makes one model call per file, so this trades
+# coverage against wall clock. 200 covers essentially any single MCP server submitted on its
+# own; a monorepo will still exceed it and gets a coverage finding whose severity reflects how
+# much was missed. It is NOT set by what happened to be fast enough during development — the
+# previous value of 40 was, and it silently under-scanned every real repository.
+DEFAULT_MAX_SOURCE_FILES = 200
+
 SEVERITY_MAP = {
     "CRITICAL": Severity.CRITICAL,
     "HIGH": Severity.HIGH,
@@ -222,7 +231,7 @@ async def scan_source(
     settings: Settings,
     source_path: Path,
     timeout: float = 1800.0,
-    max_source_files: int = 40,
+    max_source_files: int = DEFAULT_MAX_SOURCE_FILES,
 ) -> McpScanResult:
     """Full safe-path sweep: behavioral source analysis plus dependency vulnerabilities.
 
@@ -231,9 +240,11 @@ async def scan_source(
     pip-audit-backed `vulnerable-package` analyzer covers dependency risk without either.
 
     `max_source_files` bounds the behavioral analyzer, which invokes an LLM per source file —
-    unbounded, a large monorepo would run for hours. When the cap bites it is recorded as a
-    finding, because a scan that silently covered a fraction of the tree reads exactly like a
-    scan that found nothing.
+    unbounded, a large monorepo would run for hours and hit the timeout, returning nothing at
+    all. It comes from the asset class's POLICY so the trade-off is a governed, visible choice
+    rather than a constant nobody agreed to. When the cap bites, the shortfall is recorded as a
+    finding whose severity scales with how much went unexamined, because a scan that silently
+    covered a fraction of the tree reads exactly like a scan that found nothing.
     """
     env = scanner_env(settings)
     result = McpScanResult(ok=True, engine_version=_engine_version())
@@ -257,12 +268,26 @@ async def scan_source(
     scan_target, skipped = _bounded_target(source_path, max_source_files)
     capped = skipped > 0
     if skipped:
+        total = max_source_files + skipped
+        missed_share = skipped / total
+        # Severity follows how much went unexamined. Missing 60% of a tree is not the same
+        # finding as missing 5%, and reporting both as MEDIUM flattened that away.
+        coverage_severity = (
+            Severity.HIGH
+            if missed_share >= 0.5
+            else Severity.MEDIUM
+            if missed_share >= 0.2
+            else Severity.LOW
+        )
         result.findings.append(
             ScanFinding(
                 analyzer="coverage",
-                severity=Severity.MEDIUM,
+                severity=coverage_severity,
                 rule_id="scan_coverage_capped",
-                title=f"Behavioral analysis covered {max_source_files} of {max_source_files + skipped} source files",
+                title=(
+                    f"Behavioral analysis covered {max_source_files} of {total} source files "
+                    f"({missed_share:.0%} unexamined)"
+                ),
                 detail=(
                     f"{skipped} source file(s) were not analysed, because the behavioral "
                     "analyzer runs a model per file and an unbounded sweep of a large "
@@ -369,8 +394,23 @@ async def scan_source(
     return result
 
 
-SOURCE_SUFFIXES = (".py", ".js", ".ts", ".mjs", ".cjs", ".tsx", ".jsx")
-SKIP_DIRS = {".git", "node_modules", "venv", ".venv", "dist", "build", "__pycache__", "tests"}
+# MCP servers are written in more than two languages. The original list covered only Python
+# and JavaScript/TypeScript, so a server written in Go, Rust, Java, Ruby or shell had NO
+# selectable source files at all — which now surfaces as "nothing was examined" but previously
+# read as a clean scan.
+SOURCE_SUFFIXES = (
+    ".py", ".pyi",
+    ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
+    ".go", ".rs", ".rb", ".php", ".java", ".kt", ".cs", ".swift",
+    ".c", ".cc", ".cpp", ".h", ".hpp",
+    ".sh", ".bash", ".zsh", ".ps1", ".lua", ".pl",
+)
+# Directories that are not the submission's own code: version control, vendored dependencies,
+# build output, virtualenvs. `tests` is deliberately NOT here — test code is still code that
+# was submitted, and excluding a whole directory outright is a blind spot rather than a saving.
+# Relevance ranking already sorts tests to the back of a capped scan, which achieves the same
+# cost control without making them invisible.
+SKIP_DIRS = {".git", "node_modules", "venv", ".venv", "dist", "build", "__pycache__", ".tox"}
 
 
 def _source_files(root: Path) -> list[Path]:

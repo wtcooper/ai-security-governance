@@ -463,6 +463,13 @@ Worth reading before trusting a result:
 - **MCP and skills run in advisory mode.** They can withhold approval but never grant it, because
   the false-positive baseline is thin — 3 benign MCP servers and 4 safe skills in the vendor
   corpora. Adding benign servers is the prerequisite for `mode: gating`.
+- **Assessment coverage is capped, and the cap is a policy setting.** The behavioral analyzer
+  makes one model call per source file, so `max_source_files` (default 200) bounds a scan.
+  Anything beyond it is reported as a finding whose severity reflects how much went unexamined
+  — never as a clean result. Every limit in the codebase is audited in
+  [docs/LIMITS_AUDIT.md](docs/LIMITS_AUDIT.md), which classifies each by what happens when it
+  bites; the rule is that a limit reducing what gets assessed belongs in the policy, and a
+  limit protecting the host belongs in code and must fail closed.
 - **Scan time scales with file count.** A single-server submission takes ~40 seconds including the
   dependency audit. Monorepos are slow because the behavioral analyzer invokes a model per source
   file, so they are capped at 40 files with the shortfall reported *as a finding*. Submit one

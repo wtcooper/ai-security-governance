@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { BadgeCheck, History } from "lucide-react";
 import {
+  fetchPolicyForm,
   fetchPolicyVersion,
   fetchPolicyVersions,
   type AssetType,
@@ -38,7 +39,10 @@ export default async function PolicyPage({
   const requested = v ? Number(v) : versions[0].version;
   const selectedMeta =
     versions.find((entry) => entry.version === requested) ?? versions[0];
-  const selected = await fetchPolicyVersion(assetType, selectedMeta.version);
+  const [selected, form] = await Promise.all([
+    fetchPolicyVersion(assetType, selectedMeta.version),
+    fetchPolicyForm(assetType),
+  ]);
   if (!selected) notFound();
 
   return (
@@ -121,7 +125,11 @@ export default async function PolicyPage({
           })}
         </aside>
 
-        <PolicyEditor assetType={assetType} version={selected} />
+        <PolicyEditor
+          assetType={assetType}
+          version={selected}
+          formValues={selected.is_active ? (form?.values ?? null) : null}
+        />
       </div>
     </div>
   );

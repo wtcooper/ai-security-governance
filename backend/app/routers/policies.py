@@ -18,6 +18,7 @@ from sqlmodel import Session
 from app.db import get_session
 from app.models import AssetType
 from app.scoring import policy as policy_store
+from app.scoring import policy_form
 from app.scoring.policy import PolicyValidationError
 
 router = APIRouter(tags=["policies"])
@@ -106,6 +107,73 @@ def create_version(
     """Validate and save the next version. Invalid content creates nothing."""
     try:
         row = policy_store.create_version(session, asset_type, request.content, request.note)
+    except PolicyValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return PolicyVersionOut(
+        asset_type=asset_type,
+        version=row.version,
+        content_hash=row.content_hash,
+        note=row.note,
+        created_at=row.created_at,
+        is_active=True,
+        content=row.content,
+    )
+
+
+@router.get("/policies/{asset_type}/form")
+def form_values(asset_type: AssetType, session: SessionDep) -> dict:
+    """The active version's key settings, shaped for the form editor."""
+    row = policy_store.newest_version(session, asset_type)
+    if row is None:
+        raise HTTPException(status_code=503, detail="policies are not seeded yet")
+    return {
+        "asset_type": asset_type.value,
+        "version": row.version,
+        "values": policy_form.current_form_values(asset_type, row.content),
+    }
+
+
+class LlmFormRequest(policy_form.LlmPolicyForm):
+    note: str | None = None
+
+
+class ScannerFormRequest(policy_form.ScannerPolicyForm):
+    note: str | None = None
+
+
+@router.post("/policies/llm/form", response_model=PolicyVersionOut, status_code=201)
+def create_llm_version_from_form(
+    request: LlmFormRequest, session: SessionDep
+) -> PolicyVersionOut:
+    """Apply a form edit to the active LLM policy and save it as the next version.
+
+    The form updates the settings that are preferences (thresholds, sample counts, judge,
+    weights); registry facts (metric, direction) and pinned core sets are not form fields.
+    Comments in the document survive: the edit is a round-trip, not a regeneration.
+    """
+    return _create_from_form(session, AssetType.LLM, request)
+
+
+@router.post("/policies/{asset_type}/form", response_model=PolicyVersionOut, status_code=201)
+def create_scanner_version_from_form(
+    asset_type: AssetType, request: ScannerFormRequest, session: SessionDep
+) -> PolicyVersionOut:
+    if asset_type is AssetType.LLM:
+        # Routed above; reaching here means the payload did not match the LLM form.
+        raise HTTPException(status_code=422, detail="LLM form payload malformed")
+    return _create_from_form(session, asset_type, request)
+
+
+def _create_from_form(session, asset_type: AssetType, request) -> PolicyVersionOut:
+    current = policy_store.newest_version(session, asset_type)
+    if current is None:
+        raise HTTPException(status_code=503, detail="policies are not seeded yet")
+    if asset_type is AssetType.LLM:
+        content = policy_form.apply_llm_form(current.content, request)
+    else:
+        content = policy_form.apply_scanner_form(current.content, request)
+    try:
+        row = policy_store.create_version(session, asset_type, content, request.note)
     except PolicyValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return PolicyVersionOut(

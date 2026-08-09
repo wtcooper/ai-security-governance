@@ -8,9 +8,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.db import init_db
+from app.db import init_db, session_scope
 from app.routers import (
+    benchmarks,
     leaderboard,
+    policies,
     policy,
     preflight,
     published,
@@ -22,7 +24,13 @@ from app.routers import (
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    from app.jobs import close_orphaned_runs
+    from app.scoring.policy import seed_policies
+
     init_db()
+    with session_scope() as session:
+        seed_policies(session, get_settings().policy_dir)
+        close_orphaned_runs(session)
     yield
 
 
@@ -52,6 +60,8 @@ app.include_router(leaderboard.router, prefix="/api")
 app.include_router(policy.router, prefix="/api")
 app.include_router(uploads.router, prefix="/api")
 app.include_router(published.router, prefix="/api")
+app.include_router(policies.router, prefix="/api")
+app.include_router(benchmarks.router, prefix="/api")
 
 
 @app.get("/api/health", tags=["health"])

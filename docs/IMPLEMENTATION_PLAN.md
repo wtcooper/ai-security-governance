@@ -660,6 +660,58 @@ decision, the gate table, and severity.
 
 ---
 
+**Phase 8 — Versioned policies, benchmark transparency, explainability.**
+
+Driven by the first real usage session. Three observations forced this phase: sample counts
+were an arbitrary form default rather than governed configuration; the policy was a YAML file
+nobody could see or safely change; and pages showed verdicts without explaining what produced
+them (a score computed over 2 samples looked identical to one over 1,000).
+
+*Design decisions:*
+
+- **The policy is the document that controls what runs.** Per-benchmark sample counts move out
+  of the submit form and into the policy. The form keeps only an explicit dev override, and a
+  run that used one is visibly flagged — a wiring check must never be mistakable for a
+  governance run.
+- **One policy per asset class** (`llm`, `mcp`, `skill`), stored in the DB as **immutable
+  versions**: every edit inserts a new row, the newest version is always the one applied, and
+  any older version stays viewable. Runs already record `policy_version`/`policy_hash`; those
+  now refer to the class policy that actually governed the run. `policy.yaml` remains only as
+  the v1 seed for an empty database.
+- **Fixed core sample sets, stored in policy.** Verified against installed Inspect 0.3.253:
+  `eval()` accepts `sample_id` lists, and dataset sample IDs are stable content-derived strings
+  (`cyberseceval4_pi_7cff8e61`) carrying metadata usable for stratification
+  (`injection_variant`). A gate may therefore pin `sample_ids:` — an explicit, versioned,
+  reviewable list — instead of `samples: N` (which selects the dataset's first N,
+  deterministic but unstratified). Core sets are *proposed* by seeded stratified selection
+  (largest-remainder allocation across strata, seeded RNG within each stratum — same seed,
+  same dataset, same ids) and *adopted* by saving a new policy version, so changing the core
+  set is always a visible policy event, never a silent re-roll.
+- **Benchmark pages are the explanation of record**: per benchmark — intent, what a test case
+  looks like (real examples from the dataset, cached preview built by a scrubbed-env child
+  process), dataset size and strata, how it is scored, and the active gate. The preview child
+  never needs credentials: building a task object loads its dataset without calling any model.
+- **Landing page carries only the decision to make** (three asset classes); gateway state
+  shrinks to a status pill in the header.
+
+*Acceptance criteria 8.1–8.12:*
+| # | Criterion |
+|---|---|
+| 8.1 | Empty DB seeds three class policies (v1) from policy.yaml; content hash recorded |
+| 8.2 | Editing a policy creates v2; v1 content is unchanged and still viewable; newest version governs the next run |
+| 8.3 | Invalid policy content (unknown check id, bad direction, non-numeric threshold, bad scanner mode) is rejected with a specific error and creates no version |
+| 8.4 | LLM sample counts come from the policy gates; a form override is recorded on the run and flagged in the UI |
+| 8.5 | A gate with `sample_ids` runs exactly those samples (`--sample-id` reaches the child argv) |
+| 8.6 | Core-set proposal is deterministic: same seed + size ⇒ identical id list, allocation proportional across strata |
+| 8.7 | Benchmark pages render intent, gate config, dataset total, strata and ≥3 real example samples for at least the prompt-injection benchmark; a benchmark whose preview cannot build says so rather than erroring |
+| 8.8 | Every gated score displays its n; runs with an override show it at the verdict |
+| 8.9 | Running runs show live per-benchmark progress (benchmark i/N, samples j/n) without manual reload |
+| 8.10 | Orphaned `running` runs are closed out as failed on backend startup, never left spinning forever |
+| 8.11 | Evaluate and Results pages have an expandable policy view (version, hash, full content) linking to version history |
+| 8.12 | `pytest` and `npm run build` clean; policy CRUD + benchmark endpoints exercised in e2e.sh |
+
+---
+
 ## Verification
 
 - **Gateway (the historical risk), in this order:**

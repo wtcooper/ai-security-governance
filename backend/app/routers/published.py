@@ -194,7 +194,7 @@ def save_published(request: SaveRequest, settings: SettingsDep) -> dict[str, Any
 
 
 def _catalog_path(settings: Settings):
-    return settings.policy_path.parent.parent / "catalog" / "published_scores.yaml"
+    return settings.policy_dir.parent / "catalog" / "published_scores.yaml"
 
 
 def _to_text(html: str) -> str:

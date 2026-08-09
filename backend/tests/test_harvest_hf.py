@@ -17,9 +17,9 @@ import pytest
 from app.engines.harvest_hf import SCANNER_KEYS, HarvestResult, parse_security_status
 from app.models import Decision
 from app.scoring import gates
-from app.scoring.policy import load_policy
+from app.scoring.policy import load_policy_dir
 
-POLICY_PATH = Path(__file__).resolve().parents[1] / "policy" / "policy.yaml"
+POLICY_DIR = Path(__file__).resolve().parents[1] / "policy"
 
 # Captured live from openai-community/gpt2.
 SAFE_BIN = {
@@ -63,7 +63,7 @@ UNSAFE_BIN = {
 
 @pytest.fixture
 def policy():
-    return load_policy(POLICY_PATH)
+    return load_policy_dir(POLICY_DIR)
 
 
 def test_all_five_scanners_are_parsed():

@@ -68,6 +68,30 @@ class Severity(StrEnum):
     INFO = "info"
 
 
+class PolicyVersion(SQLModel, table=True):
+    """One immutable version of one asset class's governance policy.
+
+    Rows are only ever inserted — editing a policy means writing version n+1, and the newest
+    version per asset class is the one applied to new runs. Old rows are the audit trail
+    that makes a historical run's recorded (version, hash) pair resolvable to actual
+    content, which is the whole point of versioning.
+    """
+
+    __tablename__ = "policy_version"
+
+    id: int | None = Field(default=None, primary_key=True)
+    asset_type: AssetType = Field(index=True)
+    # Monotonic per asset_type, starting at 1.
+    version: int = Field(index=True)
+    # YAML text, kept as authored (comments included) so the policy stays a readable
+    # document rather than a normalised blob.
+    content: str
+    content_hash: str
+    # Why this version exists, supplied at save time.
+    note: str | None = None
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
 class Asset(SQLModel, table=True):
     __tablename__ = "asset"
 
@@ -111,6 +135,11 @@ class Run(SQLModel, table=True):
     # Scanner provenance (MCP/skill runs).
     engine_version: str | None = None
     ruleset_version: str | None = None
+
+    # A per-run sample-count override from the submit form. Nullable and visibly flagged in
+    # the UI when set: an override exists for wiring checks, and a wiring check must never
+    # read as a governance run.
+    sample_override: int | None = None
 
     started_at: datetime = Field(default_factory=_utcnow)
     finished_at: datetime | None = None

@@ -264,14 +264,89 @@ POLICY_OUT=$(curl -sf --max-time 15 "$BACKEND/api/policy" 2>&1)
 if echo "$POLICY_OUT" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
-assert d['content_hash'], 'policy must be content-hashed'
+# Phase 8: per-class versions + hashes replace the single top-level pair.
+assert all(c['content_hash'] for c in d['classes'].values()), 'policies must be content-hashed'
 assert d['composite_is_display_only'] is True
 assert len(d['llm_gates'])==5, d['llm_gates']
+assert all('planned_samples' in g for g in d['llm_gates'].values()), 'gates must carry sample counts'
 assert d['thresholds_are_calibrated'] is False, 'placeholders must be labelled as such'
 " 2>/dev/null; then
-    pass "policy exposes 5 gates, content hash, and honest calibration status"
+    pass "policy exposes 5 gates with sample counts, per-class hashes, honest calibration status"
 else
     fail "policy endpoint" "$POLICY_OUT"
+fi
+
+# --------------------------------------------------------------------------------------
+section "8.1-8.4  Versioned policies: seed, immutable edit, validation, governing samples"
+# --------------------------------------------------------------------------------------
+SEED_OUT=$(curl -sf --max-time 15 "$BACKEND/api/policies" 2>&1)
+if echo "$SEED_OUT" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+assert set(d)=={'llm','mcp','skill'}, set(d)
+assert all(v['version']==1 and v['content_hash'] for v in d.values()), d
+" 2>/dev/null; then
+    pass "8.1 clean DB seeded one v1 policy per asset class, content-hashed"
+else
+    fail "policy seeding" "$SEED_OUT"
+fi
+
+# Invalid content must be rejected with a named problem and create nothing.
+LLM_V1=$(curl -sf --max-time 15 "$BACKEND/api/policies/llm/versions/1" 2>&1)
+BAD_STATUS=$(echo "$LLM_V1" | python3 -c "
+import json,sys,urllib.request,urllib.error
+content=json.load(sys.stdin)['content'].replace('metric: refusal_rate','metric: accuracy')
+body=json.dumps({'content':content,'note':'must fail'}).encode()
+req=urllib.request.Request('$BACKEND/api/policies/llm/versions',data=body,
+                           headers={'Content-Type':'application/json'})
+try:
+    urllib.request.urlopen(req); print('accepted')
+except urllib.error.HTTPError as e:
+    detail=json.loads(e.read())['detail']
+    print(e.code if 'metric must be' in detail else f'{e.code}:{detail[:80]}')
+" 2>/dev/null)
+if [ "$BAD_STATUS" = "422" ]; then
+    pass "8.3 policy disagreeing with the registry rejected (422, named problem)"
+else
+    fail "policy validation" "got: $BAD_STATUS"
+fi
+
+# A valid edit creates v2; v1 stays byte-identical; the new samples value governs /checks.
+EDIT_OUT=$(echo "$LLM_V1" | python3 -c "
+import json,sys,urllib.request
+v1=json.load(sys.stdin)['content']
+edited=v1.replace('samples: 20','samples: 7',1)
+assert edited!=v1
+body=json.dumps({'content':edited,'note':'e2e: PI samples 20->7'}).encode()
+req=urllib.request.Request('$BACKEND/api/policies/llm/versions',data=body,
+                           headers={'Content-Type':'application/json'})
+v2=json.loads(urllib.request.urlopen(req).read())
+v1_again=json.loads(urllib.request.urlopen('$BACKEND/api/policies/llm/versions/1').read())
+assert v2['version']==2 and v2['is_active']
+assert v1_again['content']==v1, 'v1 content changed - immutability broken'
+checks=json.loads(urllib.request.urlopen('$BACKEND/api/checks?asset_type=llm').read())
+pi=[c for c in checks if c['id']=='cyse4_multilingual_prompt_injection'][0]
+assert pi['planned_samples']==7, pi
+print('OK')
+" 2>&1)
+if [ "$EDIT_OUT" = "OK" ]; then
+    pass "8.2/8.4 edit created immutable v2 and its sample count now governs"
+else
+    fail "policy edit round-trip" "$EDIT_OUT"
+fi
+
+# Benchmark transparency endpoints.
+BENCH_OUT=$(curl -sf --max-time 15 "$BACKEND/api/benchmarks" 2>&1)
+if echo "$BENCH_OUT" | python3 -c "
+import json,sys
+rows=json.load(sys.stdin)
+assert len(rows)==5, len(rows)
+assert all(r['intent'] for r in rows), 'a benchmark has no intent text'
+assert all(r['gate'] for r in rows), 'a benchmark has no active gate'
+" 2>/dev/null; then
+    pass "8.7 benchmarks endpoint lists all five with intent and active gate"
+else
+    fail "benchmarks endpoint" "$BENCH_OUT"
 fi
 
 # --------------------------------------------------------------------------------------
@@ -286,6 +361,20 @@ RUN_ID=$(echo "$RUN_CREATE" | python3 -c "import json,sys; print(json.load(sys.s
 
 if [ -n "$RUN_ID" ]; then
     pass "run $RUN_ID created (preflight passed for subject and judge)"
+
+    # 8.9: live progress is queryable while the run executes.
+    PROG_OUT=$(curl -sf --max-time 20 "$BACKEND/api/runs/$RUN_ID/progress" 2>&1)
+    if echo "$PROG_OUT" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+assert len(d['benchmarks'])==5, d
+assert all(b['state'] in ('done','running','queued') for b in d['benchmarks']), d
+assert d['sample_override']==$E2E_RUN_LIMIT, d
+" 2>/dev/null; then
+        pass "8.9 progress endpoint reports all five benchmarks and the override"
+    else
+        fail "run progress endpoint" "$PROG_OUT"
+    fi
 
     DEADLINE=$((SECONDS + E2E_RUN_TIMEOUT))
     RUN_JSON=""
@@ -585,11 +674,13 @@ section "0.11  Frontend renders live gateway state"
 # --------------------------------------------------------------------------------------
 HOME_HTML=$(curl -sf --max-time 20 "$FRONTEND" 2>&1)
 MISSING=""
-for needle in "Foundation model" "MCP server" "Agent skill" "reachable" "$SUBJECT_MODEL"; do
+# Phase 8 simplified the landing page: asset classes + how-it-works, with gateway state
+# reduced to a header pill (sr-only carries reachable/unreachable for the check).
+for needle in "LLM" "MCP server" "Agent skill" "How it works" "reachable"; do
     echo "$HOME_HTML" | grep -q "$needle" || MISSING="$MISSING '$needle'"
 done
 if [ -z "$MISSING" ]; then
-    pass "landing page shows all three asset classes and live gateway state"
+    pass "landing page shows all three asset classes and the gateway pill"
 else
     fail "frontend content" "missing:$MISSING"
 fi

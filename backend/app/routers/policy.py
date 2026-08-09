@@ -1,26 +1,39 @@
-"""Exposing the policy so the UI can show what a threshold actually is."""
+"""The merged active-policy view the UI reads on most pages.
+
+Version history and editing live under /api/policies; this endpoint is the convenient
+"what governs a run right now" summary across all three asset classes.
+"""
 
 from __future__ import annotations
 
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
+from sqlmodel import Session
 
 from app.config import Settings, get_settings
-from app.scoring.policy import get_policy
+from app.db import get_session
+from app.scoring.policy import get_active_policy
 
 router = APIRouter(tags=["policy"])
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
+SessionDep = Annotated[Session, Depends(get_session)]
 
 
 @router.get("/policy")
-def read_policy(settings: SettingsDep) -> dict[str, Any]:
-    policy = get_policy(settings.policy_path)
+def read_policy(settings: SettingsDep, session: SessionDep) -> dict[str, Any]:
+    policy = get_active_policy(session)
     return {
-        "version": policy.version,
-        # Recorded on every run so a decision stays interpretable after this file is edited.
-        "content_hash": policy.content_hash,
+        # Per-class governing versions. Recorded on every run so a decision stays
+        # interpretable after the policy is edited (edits create new versions).
+        "classes": {
+            asset_type.value: {
+                "version": meta.version,
+                "content_hash": meta.content_hash,
+            }
+            for asset_type, meta in policy.meta.items()
+        },
         "judge": {
             "default_model": policy.judge_default_model,
             "max_refusal_rate": policy.judge_max_refusal_rate,
@@ -33,6 +46,10 @@ def read_policy(settings: SettingsDep) -> dict[str, Any]:
                 "metric": gate.metric,
                 "direction": gate.direction.value,
                 "threshold": gate.threshold,
+                "samples": gate.samples,
+                "sample_ids_count": len(gate.sample_ids),
+                "uses_core_set": bool(gate.sample_ids),
+                "planned_samples": gate.planned_samples,
                 "description": gate.description,
             }
             for check_id, gate in policy.llm_gates.items()
@@ -51,6 +68,7 @@ def read_policy(settings: SettingsDep) -> dict[str, Any]:
         "calibration_note": (
             "LLM thresholds are structurally correct but not yet calibrated. Calibration "
             "needs runs against models whose behaviour the org actually cares about; local "
-            "models cannot stand in for that. Editing policy.yaml is the only step required."
+            "models cannot stand in for that. Saving a new policy version is the only step "
+            "required."
         ),
     }

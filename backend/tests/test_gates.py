@@ -13,14 +13,14 @@ import pytest
 
 from app.models import Decision, Direction, Provenance, Score, Severity
 from app.scoring import gates, normalize
-from app.scoring.policy import load_policy
+from app.scoring.policy import load_policy_dir
 
-POLICY_PATH = Path(__file__).resolve().parents[1] / "policy" / "policy.yaml"
+POLICY_DIR = Path(__file__).resolve().parents[1] / "policy"
 
 
 @pytest.fixture
 def policy():
-    return load_policy(POLICY_PATH)
+    return load_policy_dir(POLICY_DIR)
 
 
 def _score(check_id: str, value: float, policy, gated: bool = True) -> Score:
@@ -234,15 +234,16 @@ def test_composite_returns_none_when_nothing_scored(policy):
     assert normalize.composite_score({}, policy.composite_weights) is None
 
 
-def test_policy_hash_changes_with_content(tmp_path):
+def test_policy_hash_changes_with_content():
     """policy_hash must actually track content, or historical runs lose their meaning."""
-    original = POLICY_PATH.read_text()
-    first = tmp_path / "a.yaml"
-    first.write_text(original)
-    second = tmp_path / "b.yaml"
-    second.write_text(original.replace("threshold: 0.85", "threshold: 0.95"))
+    from app.scoring.policy import content_hash
 
-    assert load_policy(first).content_hash != load_policy(second).content_hash
+    original = (POLICY_DIR / "llm.yaml").read_text()
+    edited = original.replace("threshold: 0.85", "threshold: 0.95")
+    assert edited != original, "the edit must actually change the document"
+    assert content_hash(original) != content_hash(edited)
+    # Identical content must hash identically, or the field would be noise.
+    assert content_hash(original) == content_hash((POLICY_DIR / "llm.yaml").read_text())
 
 
 def test_subject_refusal_text_does_not_count_as_a_judge_refusal():

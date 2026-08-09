@@ -37,7 +37,7 @@ from app.models import (
     Severity,
 )
 from app.scoring import gates, normalize
-from app.scoring.policy import get_policy
+from app.scoring.policy import Gate, Policy, get_active_policy
 
 # Keeps a local Ollama box from being asked to serve several evals at once, which would make
 # every one of them slower without finishing any sooner.
@@ -46,6 +46,29 @@ _RUN_SEMAPHORE = asyncio.Semaphore(1)
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+def close_orphaned_runs(session: Session) -> int:
+    """Fail any run left `running`/`pending` by a previous process. Called at startup.
+
+    Jobs are in-process asyncio tasks, so a backend restart kills them silently. Without
+    this, such a run spins forever in the UI claiming work that is no longer happening.
+    """
+    orphans = session.exec(
+        select(Run).where(Run.status.in_([RunStatus.PENDING, RunStatus.RUNNING]))
+    ).all()
+    for run in orphans:
+        run.status = RunStatus.FAILED
+        run.decision = Decision.ERROR
+        run.decision_reason = (
+            "Interrupted by a backend restart before finishing. Scores recorded up to "
+            "that point are partial; start a new run."
+        )
+        run.error = run.error or "interrupted by backend restart"
+        run.finished_at = _utcnow()
+        session.add(run)
+    session.commit()
+    return len(orphans)
 
 
 async def start_run(
@@ -89,23 +112,26 @@ async def _run_llm_checks(
     limit_override: int | None = None,
     only_checks: list[str] | None = None,
 ) -> None:
-    policy = get_policy(settings.policy_path)
-
     with session_scope() as session:
+        # The policy is resolved ONCE, at run start, and its identity is recorded before any
+        # work happens: a policy edited mid-run must not change what this run means.
+        policy = get_active_policy(session)
         run = session.get(Run, run_id)
         if run is None:
             return
         asset = session.get(Asset, run.asset_id)
         if asset is None:
             return
+        meta = policy.meta_for(AssetType.LLM)
         run.status = RunStatus.RUNNING
-        run.policy_version = policy.version
-        run.policy_hash = policy.content_hash
+        run.policy_version = meta.version
+        run.policy_hash = meta.content_hash
         session.add(run)
         session.commit()
         subject_alias = run.gateway_model or asset.identifier
         judge_alias = run.judge_model or policy.judge_default_model
         hf_repo_id = asset.hf_repo_id
+        sample_override = limit_override or run.sample_override
 
     checks = checks_for(AssetType.LLM)
     if only_checks:
@@ -117,7 +143,7 @@ async def _run_llm_checks(
     for check in checks:
         # Harvest first: a published number costs nothing to reuse.
         published = harvest_catalog.lookup(
-            settings.policy_path.parent.parent / "catalog" / "published_scores.yaml",
+            settings.policy_dir.parent / "catalog" / "published_scores.yaml",
             subject_alias,
             check.id,
         )
@@ -129,9 +155,10 @@ async def _run_llm_checks(
             settings,
             run_id,
             check,
+            policy,
             subject_alias,
             judge_alias,
-            limit_override,
+            sample_override,
             unresolved_rates,
             heuristic_rates,
         )
@@ -141,7 +168,7 @@ async def _run_llm_checks(
     # re-run scanners that have already run.
     weights_outcome = None
     if hf_repo_id:
-        weights_outcome = await _harvest_weight_scan(settings, run_id, hf_repo_id)
+        weights_outcome = await _harvest_weight_scan(settings, run_id, hf_repo_id, policy)
 
     # A judge that would not grade makes the whole run unusable, so the worst rate across
     # checks decides rather than an average that would dilute one bad check.
@@ -158,18 +185,18 @@ async def _run_scanner_checks(settings: Settings, run_id: int, asset_type: Asset
 
     from app.engines import mcp_scanner, skill_scanner, source
 
-    policy = get_policy(settings.policy_path)
-
     with session_scope() as session:
+        policy = get_active_policy(session)
         run = session.get(Run, run_id)
         if run is None:
             return
         asset = session.get(Asset, run.asset_id)
         if asset is None:
             return
+        meta = policy.meta_for(asset_type)
         run.status = RunStatus.RUNNING
-        run.policy_version = policy.version
-        run.policy_hash = policy.content_hash
+        run.policy_version = meta.version
+        run.policy_hash = meta.content_hash
         session.add(run)
         session.commit()
         origin = asset.source_url or asset.identifier
@@ -247,18 +274,16 @@ async def _run_scanner_checks(settings: Settings, run_id: int, asset_type: Asset
             session.add(run)
 
         # Severity roll-up for leaderboard ordering only, stored ungated so the gate
-        # evaluator cannot read it.
+        # evaluator cannot read it. The penalty table comes from this class's own policy.
+        penalty = policy.scanner[asset_type].severity_penalty
+        rollup = normalize.severity_rollup(result.severity_counts(), penalty)
         session.add(
             Score(
                 run_id=run_id,
                 check_id=f"{asset_type.value}.severity_rollup",
                 metric="severity_rollup",
-                raw_value=normalize.severity_rollup(
-                    result.severity_counts(), policy.severity_penalty
-                ),
-                normalized=normalize.severity_rollup(
-                    result.severity_counts(), policy.severity_penalty
-                ),
+                raw_value=rollup,
+                normalized=rollup,
                 gated=False,
                 provenance=Provenance.SELF_RUN,
             )
@@ -281,13 +306,12 @@ def _record_scanner_failure(run_id: int, message: str) -> None:
         session.commit()
 
 
-async def _harvest_weight_scan(settings: Settings, run_id: int, repo_id: str):
+async def _harvest_weight_scan(settings: Settings, run_id: int, repo_id: str, policy: Policy):
     """Pull Hub scan results, record them, and return the supply-chain verdict."""
     import json
 
     from app.engines import harvest_hf
 
-    policy = get_policy(settings.policy_path)
     result = await harvest_hf.harvest(repo_id)
 
     with session_scope() as session:
@@ -387,18 +411,39 @@ async def _run_single_check(
     settings: Settings,
     run_id: int,
     check: Check,
+    policy: Policy,
     subject_alias: str,
     judge_alias: str,
-    limit_override: int | None,
+    sample_override: int | None,
     unresolved_rates: list[float],
     heuristic_rates: list[float],
 ) -> None:
+    gate: Gate | None = policy.llm_gates.get(check.id)
+
+    # How many test cases, and which ones, comes from the POLICY — the governed document —
+    # not from a form default. Resolution order:
+    #   1. an explicit per-run override (a dev/wiring facility, recorded and flagged);
+    #   2. the gate's fixed core set (`sample_ids`), which runs exactly those cases;
+    #   3. the gate's `samples` count (the dataset's first N — deterministic);
+    #   4. the registry fallback, only for a check the policy does not gate.
+    sample_ids: tuple[str, ...] = ()
+    if sample_override is not None:
+        limit: int | None = sample_override
+    elif gate is not None and gate.sample_ids:
+        limit = None
+        sample_ids = gate.sample_ids
+    elif gate is not None:
+        limit = gate.samples
+    else:
+        limit = check.default_limit
+
     result = await inspect_runner.run_eval(
         settings,
         task=check.id,
         model_alias=subject_alias,
         judge_alias=judge_alias if check.needs_judge else None,
-        limit=limit_override or check.default_limit,
+        limit=limit,
+        sample_ids=sample_ids,
         timeout=3600.0,
     )
     payload = result.payload
@@ -412,7 +457,6 @@ async def _run_single_check(
     if isinstance(heuristic, (int, float)):
         heuristic_rates.append(float(heuristic))
 
-    gate = get_policy(settings.policy_path).llm_gates.get(check.id)
     raw_reported = metrics.get(check.metric_key)
     # Convert to the canonical 0-1 rate so stored values and policy thresholds share a unit.
     raw_value = check.scale.to_rate(float(raw_reported)) if raw_reported is not None else None

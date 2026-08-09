@@ -1,13 +1,15 @@
 import Link from "next/link";
-import { ArrowRight, CircleCheck, CircleX } from "lucide-react";
-import { fetchGatewayStatus, fetchModels, type AssetType } from "@/lib/api";
+import { ArrowRight } from "lucide-react";
+import { type AssetType } from "@/lib/api";
 import { ASSET } from "./ui/vocabulary";
 
 const ORDER: AssetType[] = ["llm", "mcp", "skill"];
 
-export default async function Home() {
-  const [gateway, models] = await Promise.all([fetchGatewayStatus(), fetchModels()]);
-
+/**
+ * The landing page carries exactly one decision: which asset class to evaluate. Gateway
+ * state lives in the header pill; policies, benchmarks and results have their own pages.
+ */
+export default function Home() {
   return (
     <div className="space-y-12">
       <section className="max-w-2xl space-y-3">
@@ -16,8 +18,8 @@ export default async function Home() {
         </h1>
         <p className="text-[13.5px] leading-relaxed text-muted">
           Determines whether an asset clears our security thresholds and can be auto-approved,
-          or whether it needs formal deep testing. Every result is measured against a written
-          threshold and records which models and which policy produced it.
+          or whether it needs formal deep testing. Every result is measured against a written,
+          versioned policy and records which models and which policy produced it.
         </p>
       </section>
 
@@ -52,64 +54,37 @@ export default async function Home() {
         </div>
       </section>
 
-      <GatewayPanel gateway={gateway} models={models} />
+      <section>
+        <h2 className="eyebrow mb-3">How it works</h2>
+        <ol className="grid gap-px overflow-hidden rounded-card border border-rule bg-rule sm:grid-cols-4">
+          {[
+            [
+              "Submit",
+              "A gateway model alias, a repository URL, or a zip upload. Nothing submitted is ever executed.",
+            ],
+            [
+              "Measure",
+              "Security benchmarks for models; full scanner sweeps for MCP servers and skills. Sample counts come from the policy.",
+            ],
+            [
+              "Gate",
+              "Each measurement is compared against the written threshold in the versioned policy that governs the run.",
+            ],
+            [
+              "Decide",
+              "Auto-approve only when every gate passes. Anything less goes to human deep testing — never silently through.",
+            ],
+          ].map(([title, body], index) => (
+            <li key={title} className="space-y-1.5 bg-surface p-5">
+              <div className="flex items-baseline gap-2">
+                <span className="tnum text-[11px] text-faint">{index + 1}</span>
+                <h3 className="text-[13px] font-medium">{title}</h3>
+              </div>
+              <p className="text-[12px] leading-relaxed text-muted">{body}</p>
+            </li>
+          ))}
+        </ol>
+      </section>
     </div>
-  );
-}
-
-function GatewayPanel({
-  gateway,
-  models,
-}: {
-  gateway: Awaited<ReturnType<typeof fetchGatewayStatus>>;
-  models: string[] | null;
-}) {
-  // The gateway is the single dependency every compute engine shares, so its state is on the
-  // landing page rather than buried — one red line here explains every downstream failure.
-  const reachable = gateway?.ok ?? false;
-  const StatusIcon = reachable ? CircleCheck : CircleX;
-
-  return (
-    <section className="rounded-card border border-rule bg-surface">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-rule px-5 py-3">
-        <h2 className="eyebrow">Model gateway</h2>
-        <span
-          className={`flex items-center gap-1.5 text-[12px] font-medium ${
-            reachable ? "text-pass" : "text-block"
-          }`}
-        >
-          <StatusIcon size={13} aria-hidden="true" />
-          {reachable ? "Reachable" : "Unreachable"}
-        </span>
-      </div>
-
-      <div className="space-y-3 px-5 py-4">
-        {gateway ? (
-          <p className="tnum text-[12px] text-muted">{gateway.base_url}</p>
-        ) : (
-          <p className="text-[12px] text-block">
-            The backend did not respond. Check that the API is running on port 8000.
-          </p>
-        )}
-
-        {models === null ? (
-          <p className="text-[12px] text-warn">
-            Could not list models. Every evaluation runs through this gateway, so nothing will
-            run until it is reachable.
-          </p>
-        ) : (
-          <div className="flex flex-wrap gap-1.5">
-            {models.map((model) => (
-              <span
-                key={model}
-                className="tnum rounded border border-rule px-1.5 py-0.5 text-[11px] text-muted"
-              >
-                {model}
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
-    </section>
   );
 }

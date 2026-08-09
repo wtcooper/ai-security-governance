@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, Check, FileJson, X } from "lucide-react";
+import { ArrowLeft, Check, FileJson, FlaskConical, X } from "lucide-react";
 import { fetchRun, type Run } from "@/lib/api";
+import { Term } from "../../ui/term";
 import { ThresholdRule } from "../../ui/threshold-rule";
 import {
   PROVENANCE_ICON,
@@ -11,6 +12,7 @@ import {
   TONE_TEXT,
   decisionFor,
 } from "../../ui/vocabulary";
+import { LiveProgress } from "./live-progress";
 
 export default async function RunPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -61,16 +63,22 @@ function Verdict({ run }: { run: Run }) {
   return (
     <section className={`rounded-card border p-5 ${TONE_PANEL[verdict.tone]}`}>
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5">
           <Icon
             size={20}
             strokeWidth={2}
-            className={TONE_TEXT[verdict.tone]}
+            className={`${TONE_TEXT[verdict.tone]}${verdict.spin ? " spinner" : ""}`}
             aria-hidden="true"
           />
           <h2 className={`text-[17px] font-semibold tracking-tight ${TONE_TEXT[verdict.tone]}`}>
             {verdict.label}
           </h2>
+          {run.sample_override != null && (
+            <span className="flex items-center gap-1 rounded border border-warn/40 bg-warn-wash px-2 py-0.5 text-[11px] font-medium text-warn">
+              <FlaskConical size={11} aria-hidden="true" />
+              override n={run.sample_override} — not a policy-governed sample size
+            </span>
+          )}
         </div>
         {run.composite_score != null && (
           <div className="text-right">
@@ -83,10 +91,9 @@ function Verdict({ run }: { run: Run }) {
       </div>
 
       <p className="mt-3 max-w-3xl text-[13px] leading-relaxed text-ink/80">
-        {running
-          ? "Benchmarks run sequentially against the gateway. Reload for an update."
-          : run.decision_reason}
+        {running ? "Benchmarks run sequentially against the gateway." : run.decision_reason}
       </p>
+      <LiveProgress runId={run.id} status={run.status} />
     </section>
   );
 }
@@ -121,7 +128,12 @@ function Gates({ run }: { run: Run }) {
               return (
                 <tr key={gate.check_id} className="border-b border-rule last:border-0">
                   <td className="px-5 py-4 align-top">
-                    <div className="tnum text-[12px] font-medium">{gate.check_id}</div>
+                    <Link
+                      href={`/benchmarks/${gate.check_id}`}
+                      className="tnum text-[12px] font-medium hover:underline"
+                    >
+                      {gate.check_id}
+                    </Link>
                     {gate.description && (
                       <div className="mt-1 max-w-xs text-[11px] leading-relaxed text-muted">
                         {gate.description}
@@ -137,6 +149,19 @@ function Gates({ run }: { run: Run }) {
                       )}
                     </div>
                     <div className="eyebrow mt-0.5">{gate.metric}</div>
+                    {gate.raw_value == null && gate.reason && (
+                      <div className="mt-1 max-w-[12rem] text-[11px] leading-relaxed text-muted">
+                        {gate.reason}
+                      </div>
+                    )}
+                    {score?.total_samples != null && (
+                      <div className="tnum mt-1 text-[11px] text-muted">
+                        n={score.total_samples}
+                        {score.total_samples < 20 && (
+                          <span className="text-warn"> — coarse</span>
+                        )}
+                      </div>
+                    )}
                     {score?.unresolved_samples ? (
                       <div className="tnum mt-1 text-[11px] text-warn">
                         {score.unresolved_samples} unresolved
@@ -271,24 +296,50 @@ function Findings({ run }: { run: Run }) {
 }
 
 function Provenance({ run }: { run: Run }) {
-  const rows: [string, string][] = [
-    ["Subject model", run.gateway_model ?? "—"],
-    ["Judge model", run.judge_model ?? "none required"],
+  const rows: [string, React.ReactNode, string][] = [
+    ["subject", <span key="l">Subject model</span>, run.gateway_model ?? "—"],
     [
-      "Judge unresolved (gated)",
+      "judge",
+      <Term
+        key="l"
+        label="Judge model"
+        tip="The model that graded the subject's open-ended answers where a benchmark needs one. A wrong or refusing judge corrupts scores, which is why its reliability is measured."
+      />,
+      run.judge_model ?? "none required",
+    ],
+    [
+      "unresolved",
+      <Term
+        key="l"
+        label="Judge unresolved (gated)"
+        tip="Share of samples where the judge returned no usable verdict — reported by the scorer itself. Above the policy limit, the whole run is voided rather than trusted."
+      />,
       run.judge_unresolved_rate == null
         ? "no structural signal"
         : `${(run.judge_unresolved_rate * 100).toFixed(1)}%`,
     ],
     [
-      "Refusal phrasing (advisory)",
+      "refusal",
+      <Term
+        key="l"
+        label="Refusal phrasing (advisory)"
+        tip="A text heuristic that spots refusal wording in grading explanations. It cannot tell a judge refusal from a subject refusal, so it informs a human and never decides a run."
+      />,
       run.judge_refusal_rate == null
         ? "not measured"
         : `${(run.judge_refusal_rate * 100).toFixed(1)}%`,
     ],
-    ["Policy", run.policy_version ? `v${run.policy_version} · ${run.policy_hash}` : "—"],
-    ["Scanner engine", run.engine_version ?? "n/a"],
-    ["Ruleset", run.ruleset_version ?? "n/a"],
+    [
+      "policy",
+      <Term
+        key="l"
+        label="Policy"
+        tip="The exact immutable policy version (and content hash) that governed this run. Later edits create new versions and never change what this run meant."
+      />,
+      run.policy_version ? `v${run.policy_version} · ${run.policy_hash}` : "—",
+    ],
+    ["engine", <span key="l">Scanner engine</span>, run.engine_version ?? "n/a"],
+    ["ruleset", <span key="l">Ruleset</span>, run.ruleset_version ?? "n/a"],
   ];
 
   return (
@@ -301,9 +352,9 @@ function Provenance({ run }: { run: Run }) {
         </p>
       </div>
       <dl className="grid overflow-hidden rounded-card border border-rule bg-surface sm:grid-cols-2">
-        {rows.map(([label, value], index) => (
+        {rows.map(([key, label, value], index) => (
           <div
-            key={label}
+            key={key}
             className={`flex items-baseline justify-between gap-4 border-rule px-4 py-2.5 ${
               index % 2 === 0 ? "sm:border-r" : ""
             } border-b last:border-b-0 sm:[&:nth-last-child(-n+2)]:border-b-0`}

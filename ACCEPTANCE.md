@@ -125,7 +125,24 @@ servers added before `gating`.
 | # | Criterion | How it is verified |
 |---|---|---|
 | 5.1 | 2–3 known-approved models land `AUTO_APPROVE` under shipped thresholds | calibration run (the one place hosted models are allowed) |
-| 5.2 | Threshold changes require editing `policy.yaml` only, never code | change a threshold, re-decide a stored run, observe the flip |
+| 5.2 | Threshold changes require editing the policy only, never code | change a threshold, re-decide a stored run, observe the flip |
 | 5.3 | `policy_hash` is recorded per run so historical decisions stay interpretable | assert hash changes when policy changes |
 | 5.4 | `GET /api/stats/severity` reports the distribution used to hand-tune `block_on` | live call |
 | 5.5 | README documents Colima, compose, gateway config, Postgres swap, advisory→gating | review |
+
+## Phase 8 — Versioned policies, benchmark transparency, explainability
+
+| # | Criterion | How it is verified |
+|---|---|---|
+| 8.1 | Empty DB seeds three class policies (v1) from `backend/policy/`, content-hashed | `tests/test_policy_versions.py` + e2e live call |
+| 8.2 | Editing creates v(n+1); older versions stay byte-identical; newest governs new runs | `tests/test_policy_versions.py` + e2e round-trip |
+| 8.3 | Invalid policy content is rejected with a named problem and creates no version | parametrised validation tests + e2e 422 check |
+| 8.4 | LLM sample counts come from the policy gates; a form override is recorded and flagged | e2e `/checks` assertion + leaderboard/run-page flags |
+| 8.5 | A gate with `sample_ids` runs exactly those samples (`--sample-id` in the child argv) | `tests/test_run_control.py` |
+| 8.6 | Core-set proposal is deterministic and stratified proportionally | `tests/test_policy_versions.py` (same seed ⇒ same ids) + live double-call |
+| 8.7 | Benchmark pages render intent, gate, dataset size, strata and real example cases | e2e `/api/benchmarks` + browser inspection |
+| 8.8 | Every gated score displays its n; sub-20 counts carry a "coarse" caveat | run page inspection |
+| 8.9 | Running runs expose live per-benchmark progress; the page polls without manual reload | e2e progress-shape assertion + browser inspection |
+| 8.10 | Orphaned `running`/`pending` runs are failed on backend startup | `tests/test_run_control.py` |
+| 8.11 | Evaluate and Results pages carry an expandable governing-policy view with history link | browser inspection |
+| 8.12 | `pytest` (191) and `npm run build` clean; policy + benchmark endpoints in e2e.sh | this suite |

@@ -1,21 +1,33 @@
-"""Loading the governance policy.
+"""Loading, validating and versioning the governance policies.
 
-The policy is data, never code. It is content-hashed on load so every run records exactly
-which policy produced its decision — a threshold edited next month must not silently rewrite
-the meaning of a decision made today.
+The policy is data, never code. Each asset class (llm / mcp / skill) has its own policy
+document, stored in the database as an immutable sequence of versions: every edit inserts a
+new version, the newest version is the one applied to new runs, and older versions stay
+readable so a historical run's recorded (version, hash) pair always resolves to real
+content. The YAML files under backend/policy/ exist only to seed an empty database.
+
+Validation is strict on purpose. A policy typo that silently drops a gate is a governance
+failure, not a formatting nit — so unknown keys, unknown check ids, and metrics that
+disagree with the registry are rejected at save time with a specific error, and no version
+is created.
 """
 
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
-from functools import lru_cache
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
+from sqlmodel import Session, select
 
-from app.models import AssetType, Direction, Severity
+from app.engines.registry import CHECKS_BY_ID
+from app.models import AssetType, Direction, PolicyVersion, Severity
+
+
+class PolicyValidationError(ValueError):
+    """Raised when policy content is structurally wrong. The message names the problem."""
 
 
 @dataclass(frozen=True)
@@ -26,12 +38,22 @@ class Gate:
     metric: str
     direction: Direction
     threshold: float
+    # How many test cases a run draws from the dataset (its first N — deterministic).
+    samples: int = 20
+    # A fixed, explicit core set. When non-empty it wins over `samples`: the run executes
+    # exactly these dataset sample ids, which is what makes results repeatable across runs
+    # and comparable across models. Changing the set is a policy edit, never a re-roll.
+    sample_ids: tuple[str, ...] = ()
     description: str = ""
 
     def passes(self, value: float) -> bool:
         if self.direction is Direction.HIGHER_IS_BETTER:
             return value >= self.threshold
         return value <= self.threshold
+
+    @property
+    def planned_samples(self) -> int:
+        return len(self.sample_ids) if self.sample_ids else self.samples
 
 
 @dataclass(frozen=True)
@@ -45,6 +67,7 @@ class ScannerPolicy:
     mode: str  # "advisory" | "gating"
     block_on: frozenset[Severity]
     trust_scanner_verdict: bool
+    severity_penalty: dict[Severity, int] = field(default_factory=dict)
 
     @property
     def is_advisory(self) -> bool:
@@ -52,9 +75,16 @@ class ScannerPolicy:
 
 
 @dataclass(frozen=True)
-class Policy:
+class ClassMeta:
+    """Which version of a class policy a Policy object was built from."""
+
     version: str
     content_hash: str
+
+
+@dataclass(frozen=True)
+class Policy:
+    meta: dict[AssetType, ClassMeta]
     judge_default_model: str
     judge_max_refusal_rate: float
     llm_gates: dict[str, Gate]
@@ -62,7 +92,6 @@ class Policy:
     weights_block_on_unsafe_file: bool
     weights_treat_unscanned_as_pass: bool
     scanner: dict[AssetType, ScannerPolicy]
-    severity_penalty: dict[Severity, int]
     raw: dict[str, Any]
 
     def gates_for(self, asset_type: AssetType) -> dict[str, Gate]:
@@ -71,55 +100,333 @@ class Policy:
     def scanner_policy(self, asset_type: AssetType) -> ScannerPolicy | None:
         return self.scanner.get(asset_type)
 
+    def meta_for(self, asset_type: AssetType) -> ClassMeta:
+        return self.meta[asset_type]
 
-def _parse_gate(check_id: str, spec: dict[str, Any]) -> Gate:
+    # Compatibility accessors. Callers that predate per-class policies read a single
+    # version/hash; give them the LLM class's, which is what they were reading before.
+    @property
+    def version(self) -> str:
+        return self.meta[AssetType.LLM].version
+
+    @property
+    def content_hash(self) -> str:
+        return self.meta[AssetType.LLM].content_hash
+
+    @property
+    def severity_penalty(self) -> dict[Severity, int]:
+        return self.scanner[AssetType.MCP].severity_penalty
+
+
+def content_hash(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+
+# --- validation ---------------------------------------------------------------------------
+
+
+def _require_mapping(data: Any, what: str) -> dict:
+    if not isinstance(data, dict):
+        raise PolicyValidationError(f"{what} must be a YAML mapping, got {type(data).__name__}")
+    return data
+
+
+def _reject_unknown_keys(data: dict, allowed: set[str], what: str) -> None:
+    unknown = set(data) - allowed
+    if unknown:
+        raise PolicyValidationError(
+            f"{what} has unknown key(s) {sorted(unknown)}; allowed: {sorted(allowed)}"
+        )
+
+
+def _parse_llm_doc(text: str) -> dict[str, Any]:
+    """Parse + validate an LLM policy document. Returns the loaded data."""
+    data = _require_mapping(yaml.safe_load(text), "LLM policy")
+    _reject_unknown_keys(data, {"judge", "gates", "composite_weights", "weights"}, "LLM policy")
+
+    judge = _require_mapping(data.get("judge") or {}, "judge")
+    _reject_unknown_keys(judge, {"default_model", "max_refusal_rate"}, "judge")
+    rate = judge.get("max_refusal_rate", 0.05)
+    if not isinstance(rate, (int, float)) or not 0 <= float(rate) <= 1:
+        raise PolicyValidationError(f"judge.max_refusal_rate must be a number in [0,1], got {rate!r}")
+
+    gates = _require_mapping(data.get("gates") or {}, "gates")
+    if not gates:
+        raise PolicyValidationError("LLM policy defines no gates; nothing would be evaluated")
+
+    for check_id, spec in gates.items():
+        registered = CHECKS_BY_ID.get(check_id)
+        if registered is None:
+            raise PolicyValidationError(
+                f"gate {check_id!r} is not a registered benchmark; known: {sorted(CHECKS_BY_ID)}"
+            )
+        spec = _require_mapping(spec, f"gate {check_id!r}")
+        _reject_unknown_keys(
+            spec,
+            {"metric", "direction", "threshold", "samples", "sample_ids", "description"},
+            f"gate {check_id!r}",
+        )
+        # The registry is the ground truth for what a benchmark reports and which way it
+        # runs — a policy that disagrees is a typo, and this exact class of mismatch has
+        # produced a real bug before (cyse4_mitre_frr gated on the wrong metric).
+        if spec.get("metric") != registered.metric_name:
+            raise PolicyValidationError(
+                f"gate {check_id!r}: metric must be {registered.metric_name!r} "
+                f"(what the benchmark reports), got {spec.get('metric')!r}"
+            )
+        if spec.get("direction") != registered.direction.value:
+            raise PolicyValidationError(
+                f"gate {check_id!r}: direction must be {registered.direction.value!r}, "
+                f"got {spec.get('direction')!r}"
+            )
+        threshold = spec.get("threshold")
+        if not isinstance(threshold, (int, float)) or not 0 <= float(threshold) <= 1:
+            raise PolicyValidationError(
+                f"gate {check_id!r}: threshold must be a number in [0,1] "
+                f"(all metrics are stored as 0-1 rates), got {threshold!r}"
+            )
+        samples = spec.get("samples", 20)
+        if not isinstance(samples, int) or isinstance(samples, bool) or samples < 1:
+            raise PolicyValidationError(
+                f"gate {check_id!r}: samples must be a positive integer, got {samples!r}"
+            )
+        sample_ids = spec.get("sample_ids")
+        if sample_ids is not None:
+            if (
+                not isinstance(sample_ids, list)
+                or not sample_ids
+                or not all(isinstance(s, str) and s for s in sample_ids)
+            ):
+                raise PolicyValidationError(
+                    f"gate {check_id!r}: sample_ids must be a non-empty list of id strings"
+                )
+            if len(set(sample_ids)) != len(sample_ids):
+                raise PolicyValidationError(f"gate {check_id!r}: sample_ids contains duplicates")
+
+    weights = _require_mapping(data.get("composite_weights") or {}, "composite_weights")
+    for check_id, weight in weights.items():
+        if check_id not in CHECKS_BY_ID:
+            raise PolicyValidationError(
+                f"composite_weights names unknown benchmark {check_id!r}"
+            )
+        if not isinstance(weight, (int, float)) or float(weight) < 0:
+            raise PolicyValidationError(
+                f"composite_weights[{check_id!r}] must be a non-negative number, got {weight!r}"
+            )
+
+    supply = _require_mapping(data.get("weights") or {}, "weights")
+    _reject_unknown_keys(
+        supply, {"block_on_unsafe_file", "treat_unscanned_as_pass"}, "weights"
+    )
+    return data
+
+
+def _parse_scanner_doc(asset_type: AssetType, text: str) -> dict[str, Any]:
+    """Parse + validate an MCP/skill policy document. Returns the loaded data."""
+    what = f"{asset_type.value} policy"
+    data = _require_mapping(yaml.safe_load(text), what)
+    _reject_unknown_keys(
+        data, {"mode", "block_on", "trust_scanner_verdict", "severity_rollup_penalty"}, what
+    )
+
+    mode = data.get("mode", "advisory")
+    if mode not in ("advisory", "gating"):
+        raise PolicyValidationError(f"{what}: mode must be 'advisory' or 'gating', got {mode!r}")
+
+    block_on = data.get("block_on", ["critical", "high"])
+    valid = {s.value for s in Severity}
+    if not isinstance(block_on, list) or not block_on or not set(block_on) <= valid:
+        raise PolicyValidationError(
+            f"{what}: block_on must be a non-empty list drawn from {sorted(valid)}, got {block_on!r}"
+        )
+
+    penalty = _require_mapping(data.get("severity_rollup_penalty") or {}, "severity_rollup_penalty")
+    for key, value in penalty.items():
+        if key not in valid:
+            raise PolicyValidationError(
+                f"{what}: severity_rollup_penalty names unknown severity {key!r}"
+            )
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise PolicyValidationError(
+                f"{what}: severity_rollup_penalty[{key!r}] must be a non-negative integer"
+            )
+    return data
+
+
+def validate_class_content(asset_type: AssetType, text: str) -> dict[str, Any]:
+    """Validate a policy document for an asset class. Raises PolicyValidationError."""
+    try:
+        if asset_type is AssetType.LLM:
+            return _parse_llm_doc(text)
+        return _parse_scanner_doc(asset_type, text)
+    except yaml.YAMLError as exc:
+        raise PolicyValidationError(f"not valid YAML: {exc}") from exc
+
+
+# --- building the runtime Policy object ---------------------------------------------------
+
+
+def _gate_from_spec(check_id: str, spec: dict[str, Any]) -> Gate:
     return Gate(
         check_id=check_id,
         metric=spec["metric"],
         direction=Direction(spec["direction"]),
         threshold=float(spec["threshold"]),
+        samples=int(spec.get("samples", 20)),
+        sample_ids=tuple(spec.get("sample_ids") or ()),
         description=str(spec.get("description", "")).strip(),
     )
 
 
-def load_policy(path: Path) -> Policy:
-    text = path.read_text()
-    data = yaml.safe_load(text)
-    content_hash = hashlib.sha256(text.encode()).hexdigest()[:16]
-
-    llm = data.get("llm") or {}
-    judge = data.get("judge") or {}
-    weights = data.get("weights") or {}
-
-    scanner: dict[AssetType, ScannerPolicy] = {}
-    for asset_type in (AssetType.MCP, AssetType.SKILL):
-        spec = data.get(asset_type.value) or {}
-        scanner[asset_type] = ScannerPolicy(
-            mode=str(spec.get("mode", "advisory")),
-            block_on=frozenset(Severity(s) for s in spec.get("block_on", ["critical", "high"])),
-            trust_scanner_verdict=bool(spec.get("trust_scanner_verdict", True)),
-        )
-
-    return Policy(
-        version=str(data.get("version", "0")),
-        content_hash=content_hash,
-        judge_default_model=str(judge.get("default_model", "qwen35")),
-        judge_max_refusal_rate=float(judge.get("max_refusal_rate", 0.05)),
-        llm_gates={
-            check_id: _parse_gate(check_id, spec)
-            for check_id, spec in (llm.get("gates") or {}).items()
-        },
-        composite_weights={k: float(v) for k, v in (llm.get("composite_weights") or {}).items()},
-        weights_block_on_unsafe_file=bool(weights.get("block_on_unsafe_file", True)),
-        weights_treat_unscanned_as_pass=bool(weights.get("treat_unscanned_as_pass", False)),
-        scanner=scanner,
+def _scanner_from_data(data: dict[str, Any]) -> ScannerPolicy:
+    return ScannerPolicy(
+        mode=str(data.get("mode", "advisory")),
+        block_on=frozenset(Severity(s) for s in data.get("block_on", ["critical", "high"])),
+        trust_scanner_verdict=bool(data.get("trust_scanner_verdict", True)),
         severity_penalty={
-            Severity(k): int(v) for k, v in (data.get("severity_rollup_penalty") or {}).items()
+            Severity(k): int(v)
+            for k, v in (data.get("severity_rollup_penalty") or {}).items()
         },
-        raw=data,
     )
 
 
-@lru_cache
-def get_policy(path: Path) -> Policy:
-    return load_policy(path)
+def build_policy(docs: dict[AssetType, tuple[str, str]]) -> Policy:
+    """Build the runtime Policy from {asset_type: (yaml_text, version_label)}."""
+    llm_text, llm_version = docs[AssetType.LLM]
+    llm = validate_class_content(AssetType.LLM, llm_text)
+    judge = llm.get("judge") or {}
+    supply = llm.get("weights") or {}
+
+    scanner: dict[AssetType, ScannerPolicy] = {}
+    raw: dict[str, Any] = {"llm": llm}
+    meta: dict[AssetType, ClassMeta] = {
+        AssetType.LLM: ClassMeta(version=llm_version, content_hash=content_hash(llm_text))
+    }
+    for asset_type in (AssetType.MCP, AssetType.SKILL):
+        text, version = docs[asset_type]
+        data = validate_class_content(asset_type, text)
+        scanner[asset_type] = _scanner_from_data(data)
+        raw[asset_type.value] = data
+        meta[asset_type] = ClassMeta(version=version, content_hash=content_hash(text))
+
+    return Policy(
+        meta=meta,
+        judge_default_model=str(judge.get("default_model", "qwen35")),
+        judge_max_refusal_rate=float(judge.get("max_refusal_rate", 0.05)),
+        llm_gates={
+            check_id: _gate_from_spec(check_id, spec)
+            for check_id, spec in (llm.get("gates") or {}).items()
+        },
+        composite_weights={
+            k: float(v) for k, v in (llm.get("composite_weights") or {}).items()
+        },
+        weights_block_on_unsafe_file=bool(supply.get("block_on_unsafe_file", True)),
+        weights_treat_unscanned_as_pass=bool(supply.get("treat_unscanned_as_pass", False)),
+        scanner=scanner,
+        raw=raw,
+    )
+
+
+# --- file mode (seeding, calibration, tests) ----------------------------------------------
+
+
+def seed_path(policy_dir: Path, asset_type: AssetType) -> Path:
+    return policy_dir / f"{asset_type.value}.yaml"
+
+
+def load_policy_dir(policy_dir: Path) -> Policy:
+    """Build a Policy straight from the seed files, bypassing the database.
+
+    Used by the calibration CLI (which may run without an initialised database) and by
+    tests. Versions are labelled "seed" so output can never be mistaken for a governed run.
+    """
+    return build_policy(
+        {
+            asset_type: (seed_path(policy_dir, asset_type).read_text(), "seed")
+            for asset_type in AssetType
+        }
+    )
+
+
+# --- database mode ------------------------------------------------------------------------
+
+
+def seed_policies(session: Session, policy_dir: Path) -> None:
+    """Insert version 1 for any asset class that has no policy rows yet."""
+    for asset_type in AssetType:
+        existing = session.exec(
+            select(PolicyVersion).where(PolicyVersion.asset_type == asset_type).limit(1)
+        ).first()
+        if existing is not None:
+            continue
+        text = seed_path(policy_dir, asset_type).read_text()
+        validate_class_content(asset_type, text)
+        session.add(
+            PolicyVersion(
+                asset_type=asset_type,
+                version=1,
+                content=text,
+                content_hash=content_hash(text),
+                note="seeded from backend/policy/",
+            )
+        )
+    session.commit()
+
+
+def newest_version(session: Session, asset_type: AssetType) -> PolicyVersion | None:
+    return session.exec(
+        select(PolicyVersion)
+        .where(PolicyVersion.asset_type == asset_type)
+        .order_by(PolicyVersion.version.desc())
+        .limit(1)
+    ).first()
+
+
+def list_versions(session: Session, asset_type: AssetType) -> list[PolicyVersion]:
+    return list(
+        session.exec(
+            select(PolicyVersion)
+            .where(PolicyVersion.asset_type == asset_type)
+            .order_by(PolicyVersion.version.desc())
+        )
+    )
+
+
+def get_version(session: Session, asset_type: AssetType, version: int) -> PolicyVersion | None:
+    return session.exec(
+        select(PolicyVersion)
+        .where(PolicyVersion.asset_type == asset_type)
+        .where(PolicyVersion.version == version)
+    ).first()
+
+
+def create_version(
+    session: Session, asset_type: AssetType, content: str, note: str | None = None
+) -> PolicyVersion:
+    """Validate and store a new immutable version. The newest version governs new runs."""
+    validate_class_content(asset_type, content)
+    current = newest_version(session, asset_type)
+    row = PolicyVersion(
+        asset_type=asset_type,
+        version=(current.version + 1) if current else 1,
+        content=content,
+        content_hash=content_hash(content),
+        note=(note or "").strip() or None,
+    )
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return row
+
+
+def get_active_policy(session: Session) -> Policy:
+    """The policy that governs new runs: the newest version of each class document."""
+    docs: dict[AssetType, tuple[str, str]] = {}
+    for asset_type in AssetType:
+        row = newest_version(session, asset_type)
+        if row is None:
+            raise RuntimeError(
+                f"no policy rows for {asset_type.value}; the database was not seeded"
+            )
+        docs[asset_type] = (row.content, str(row.version))
+    return build_policy(docs)

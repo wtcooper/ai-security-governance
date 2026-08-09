@@ -21,17 +21,18 @@ Two rules shape the design:
 
 1. **Harvest before compute.** If a benchmark result or a model scan is already published, reuse
    it. Every score records its provenance (`published` / `harvested` / `self_run`) and a source.
-2. **The gate is deterministic.** Thresholds live in `policy.yaml`, one per benchmark, each with
-   an explicit direction. No model decides an approval.
+2. **The gate is deterministic.** Thresholds, sample counts and severity rules live in a
+   versioned policy — one per asset class, stored immutably in the database, edited from the UI.
+   No model decides an approval, and every run records exactly which policy version governed it.
 
 ## What it evaluates
 
 | Asset | Evaluation | Gate |
 |---|---|---|
-| **Foundation model** | 5 CyberSecEval-4 / AgentDojo benchmarks via [Inspect AI](https://inspect.aisi.org.uk) | one threshold per benchmark, on that benchmark's own headline metric |
+| **LLM** (open weights or frontier) | 5 CyberSecEval-4 / AgentDojo benchmarks via [Inspect AI](https://inspect.aisi.org.uk) | one threshold per benchmark, on that benchmark's own headline metric |
 | **Open weights** | 5 Hugging Face scanners (protectAI, ClamAV, picklescan, VirusTotal, JFrog), harvested not recomputed | any file any scanner calls unsafe blocks; *not scanned* ≠ safe |
-| **MCP server** | full [`mcp-scanner`](https://github.com/cisco-ai-defense/mcp-scanner) sweep of cloned source | severity rule, advisory by default |
-| **Agent skill** | full [`skill-scanner`](https://github.com/cisco-ai-defense/skill-scanner) sweep | severity rule + the scanner's own verdict, advisory by default |
+| **MCP server** | full [`mcp-scanner`](https://github.com/cisco-ai-defense/mcp-scanner) sweep of cloned source or an uploaded zip | severity rule, advisory by default |
+| **Agent skill** | full [`skill-scanner`](https://github.com/cisco-ai-defense/skill-scanner) sweep of cloned source or an uploaded zip | severity rule + the scanner's own verdict, advisory by default |
 
 The LLM suite is deliberately all pure-API — no Docker sandboxes — so a governance run takes
 minutes and can be repeated cheaply.
@@ -166,8 +167,15 @@ reports recall, plus a false-positive rate with its denominator attached.
 | `SCANNER_MODEL` | `gemma4` | LLM analyzer for the Cisco scanners |
 | `OPENAI_API_KEY`, `GEMINI_API_KEY` | — | consumed by the gateway only |
 
-Governance thresholds live in `backend/policy/policy.yaml`. It is content-hashed into every run,
-so editing a threshold never silently rewrites the meaning of a past decision.
+Governance policies are **versioned documents in the database**, one per asset class, edited
+from the Policies page (or `POST /api/policies/{class}/versions`). Every edit creates a new
+immutable version; the newest version governs new runs, and each run records the version and
+content hash that governed it — so editing a threshold never silently rewrites the meaning of a
+past decision. The YAML files under `backend/policy/` only seed an empty database.
+
+Each LLM gate also sets how many samples run — either `samples: N` (the dataset's first N) or a
+pinned `sample_ids:` **core set**: a stratified, seeded selection proposed from a benchmark's
+page and adopted as a policy edit, so every run measures exactly the same test cases.
 
 ### Graduating MCP/skills out of advisory mode
 
@@ -346,7 +354,7 @@ Worth reading before trusting a result:
 
 - **Thresholds are not calibrated.** They are structurally correct placeholders. Calibrating them
   needs runs against models whose behaviour you actually care about; local models can't stand in.
-  It is a `policy.yaml` edit, not a code change.
+  It is a policy edit (a new version from the Policies page), not a code change.
 - **MCP and skills run in advisory mode.** They can withhold approval but never grant it, because
   the false-positive baseline is thin — 3 benign MCP servers and 4 safe skills in the vendor
   corpora. Adding benign servers is the prerequisite for `mode: gating`.
@@ -380,8 +388,10 @@ Ideas, roughly in order of value:
   `cve_bench` and AgentDojo's sandbox suites, for the deep-testing path.
 - **Antares as an extra source analyzer.** Cisco's open-weight vulnerability-localisation models
   are cheap and run locally; note their model card rules them out as a general judge.
-- **Re-run a stored decision under a new policy** from the UI, so a threshold change can be
-  reviewed against history before it is adopted.
+- **Re-run a stored decision under a new policy version** from the UI, so a threshold change
+  can be reviewed against history before it is adopted.
+- **One-click core-set adoption** — currently propose-then-paste into the policy editor, kept
+  manual so selection changes are always deliberate; could become a guided flow.
 - **Postgres + Alembic** for multi-user deployments.
 - **CI workflow** running the pure-logic suite on every push.
 - **Export a decision record** (PDF or signed JSON) for attaching to a ticket.

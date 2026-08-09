@@ -14,9 +14,9 @@ from app.config import Settings, get_settings
 from app.db import get_session
 from app.engines import gateway
 from app.engines.registry import checks_for
-from app.models import Artifact, Asset, AssetType, Finding, Run, Score
+from app.models import Artifact, Asset, AssetType, Finding, Run, RunStatus, Score
 from app.scoring import gates
-from app.scoring.policy import get_policy
+from app.scoring.policy import get_active_policy
 
 router = APIRouter(tags=["runs"])
 
@@ -34,9 +34,10 @@ class CreateRunRequest(BaseModel):
     provider: str | None = None
     hf_repo_id: str | None = None
     judge_model: str | None = None
-    # Overrides each check's default sample cap. Exists because local judge models are slow
-    # (reasoning models emit long traces), so the test suite needs a small, explicit limit
-    # rather than silently redefining what a governance run means.
+    # Overrides the policy's per-benchmark sample counts for THIS run only. A development
+    # facility (local judge models are slow), recorded on the run and flagged in the UI so
+    # a wiring check can never be mistaken for a governance run. Absent means the policy's
+    # counts (or fixed core sets) apply — which is the governed default.
     limit: int | None = None
     # Restrict to specific check ids. Used by the test suite to exercise one benchmark at a
     # time; a real governance run leaves this unset so every gate is evaluated.
@@ -90,6 +91,8 @@ class RunOut(BaseModel):
     decision_reason: str | None
     gateway_model: str | None
     judge_model: str | None
+    # Set when the submitter overrode the policy's sample counts. Flagged in the UI.
+    sample_override: int | None = None
     judge_unresolved_rate: float | None
     judge_refusal_rate: float | None
     policy_version: str | None
@@ -114,7 +117,7 @@ async def create_run(
     settings: SettingsDep,
     session: SessionDep,
 ) -> RunOut:
-    policy = get_policy(settings.policy_path)
+    policy = get_active_policy(session)
     judge = request.judge_model or policy.judge_default_model
 
     # Refuse to start an expensive run against a route that does not work. This is the whole
@@ -155,6 +158,7 @@ async def create_run(
         asset_id=asset.id,
         gateway_model=request.identifier if request.asset_type is AssetType.LLM else None,
         judge_model=judge if request.asset_type is AssetType.LLM else settings.scanner_model,
+        sample_override=request.limit if request.asset_type is AssetType.LLM else None,
     )
     session.add(run)
     session.commit()
@@ -190,23 +194,112 @@ def get_run(run_id: int, settings: SettingsDep, session: SessionDep) -> RunOut:
 
 
 @router.get("/checks", response_model=list[dict])
-def list_checks(asset_type: AssetType = AssetType.LLM) -> list[dict]:
+def list_checks(session: SessionDep, asset_type: AssetType = AssetType.LLM) -> list[dict]:
     """What this asset class is evaluated on, and how each gate is read."""
-    return [
-        {
-            "id": check.id,
-            "metric": check.metric_name,
-            "direction": check.direction.value,
-            "default_limit": check.default_limit,
-            "needs_judge": check.needs_judge,
-            "description": check.description,
-        }
-        for check in checks_for(asset_type)
-    ]
+    policy = get_active_policy(session)
+    out = []
+    for check in checks_for(asset_type):
+        gate = policy.llm_gates.get(check.id)
+        out.append(
+            {
+                "id": check.id,
+                "metric": check.metric_name,
+                "direction": check.direction.value,
+                "needs_judge": check.needs_judge,
+                "description": check.description,
+                # From the policy, because the policy is what controls a run.
+                "planned_samples": gate.planned_samples if gate else check.default_limit,
+                "uses_core_set": bool(gate and gate.sample_ids),
+                "threshold": gate.threshold if gate else None,
+            }
+        )
+    return out
+
+
+@router.get("/runs/{run_id}/progress", response_model=dict)
+def run_progress(run_id: int, settings: SettingsDep, session: SessionDep) -> dict:
+    """Per-benchmark progress for a running LLM run, read from the live eval journal."""
+    run = session.get(Run, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"run {run_id} not found")
+    asset = session.get(Asset, run.asset_id)
+
+    if asset is None or asset.type is not AssetType.LLM:
+        return {"status": run.status.value, "benchmarks": []}
+
+    from app.engines.progress import collect_progress
+
+    policy = get_active_policy(session)
+    checks = checks_for(AssetType.LLM)
+    planned: dict[str, int] = {}
+    for check in checks:
+        gate = policy.llm_gates.get(check.id)
+        if run.sample_override is not None:
+            planned[check.id] = run.sample_override
+        elif gate is not None:
+            planned[check.id] = gate.planned_samples
+        else:
+            planned[check.id] = check.default_limit
+
+    scored = {
+        score.check_id
+        for score in session.exec(select(Score).where(Score.run_id == run_id))
+        if score.gated or score.check_id in planned
+    }
+    progress = collect_progress(
+        log_dir=settings.artifact_dir / "inspect-logs",
+        started_at=run.started_at,
+        ordered_check_ids=[check.id for check in checks],
+        planned=planned,
+        scored=scored,
+    )
+    return {
+        "status": run.status.value,
+        "sample_override": run.sample_override,
+        "benchmarks": [
+            {
+                "check_id": p.check_id,
+                "state": p.state if run.status is RunStatus.RUNNING else "done",
+                "samples_completed": p.samples_completed,
+                "samples_planned": p.samples_planned,
+            }
+            for p in progress
+        ],
+    }
+
+
+def _run_policy(session: Session, run: Run, asset: Asset):
+    """The policy to interpret this run under.
+
+    Gate outcomes are recomputed at read time, so they must come from the policy version the
+    run actually recorded — otherwise editing a threshold would silently rewrite the meaning
+    of every historical run on screen. Falls back to the active policy when the recorded
+    version cannot be resolved (runs that predate policy versioning)."""
+    from app.scoring import policy as policy_store
+    from app.scoring.policy import build_policy
+
+    active = get_active_policy(session)
+    if not run.policy_version or not run.policy_version.isdigit():
+        return active
+    row = policy_store.get_version(session, asset.type, int(run.policy_version))
+    if row is None or row.content_hash != run.policy_hash:
+        return active
+    docs = {
+        asset_type: (
+            (row.content, str(row.version))
+            if asset_type is asset.type
+            else (policy_store.newest_version(session, asset_type).content, "current")
+        )
+        for asset_type in AssetType
+    }
+    try:
+        return build_policy(docs)
+    except Exception:  # noqa: BLE001 - a historical doc must never 500 the run page
+        return active
 
 
 def _to_run_out(session: Session, run: Run, asset: Asset, settings: Settings) -> RunOut:
-    policy = get_policy(settings.policy_path)
+    policy = _run_policy(session, run, asset)
     scores = list(session.exec(select(Score).where(Score.run_id == run.id)))
     findings = list(session.exec(select(Finding).where(Finding.run_id == run.id)))
     artifacts = list(session.exec(select(Artifact).where(Artifact.run_id == run.id)))
@@ -245,6 +338,7 @@ def _to_run_out(session: Session, run: Run, asset: Asset, settings: Settings) ->
         decision_reason=run.decision_reason,
         gateway_model=run.gateway_model,
         judge_model=run.judge_model,
+        sample_override=run.sample_override,
         judge_unresolved_rate=run.judge_unresolved_rate,
         judge_refusal_rate=run.judge_refusal_rate,
         policy_version=run.policy_version,

@@ -43,7 +43,7 @@ def _settings(tmp_path: Path) -> Settings:
         db_path=tmp_path / "db.sqlite",
         artifact_dir=tmp_path / "artifacts",
         workspace_dir=tmp_path / "workspaces",
-        policy_path=tmp_path / "policy.yaml",
+        policy_dir=tmp_path / "policy",
         fixtures_dir=tmp_path / "fixtures",
     )
 

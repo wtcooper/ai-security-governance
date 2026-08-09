@@ -106,15 +106,21 @@ export function SubmitForm({
         </label>
 
         <label className="space-y-1.5">
-          <span className="eyebrow block">Sample limit (optional)</span>
+          <span className="eyebrow block">Sample override (dev only, optional)</span>
           <input
             value={limit}
             onChange={(e) => setLimit(e.target.value.replace(/\D/g, ""))}
-            placeholder="registry default"
+            placeholder="policy decides — leave empty"
             className="w-full rounded border border-rule bg-surface px-2.5 py-2 text-[13px]"
           />
         </label>
       </div>
+
+      <p className="text-[12px] leading-relaxed text-muted">
+        How many samples each benchmark runs comes from the governing policy — see the panel
+        below. The override exists for cheap wiring checks; a run that uses it is flagged on
+        every results view and should never be read as a governance result.
+      </p>
 
       <p className="text-[12px] leading-relaxed text-muted">
         Subject and judge are both preflighted with a real completion before the run starts, so

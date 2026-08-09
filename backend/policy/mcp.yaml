@@ -1,0 +1,33 @@
+# MCP server governance policy — seed for version 1.
+#
+# Scanner-backed asset class: the scanner is the evaluation, and the gate is a severity
+# rule rather than a score. Scanner findings have no fixed denominator (finding counts
+# track codebase size and what the artifact does, not danger relative to a peer), so a
+# 0-100 threshold over them would be fabricated precision.
+#
+# After first startup the governing copy lives in the DATABASE, versioned and immutable —
+# edit it from the Policies page. This file only seeds an empty database.
+
+# advisory -> every result goes to human review; nothing is ever auto-approved.
+# We ship advisory because there is no false-positive baseline yet, so an untuned severity
+# rule cannot be trusted to approve anything. Flip to `gating` once /api/stats/severity
+# shows the distribution is workable. That flip is the only change required.
+mode: advisory
+
+# NOTE: mcp-scanner has no CRITICAL severity. Its scale is HIGH / MEDIUM / LOW / UNKNOWN /
+# SAFE, so `critical` below never matches and HIGH is what actually blocks. It is listed
+# anyway so the two scanner classes read consistently and so a future scanner version that
+# does emit CRITICAL is covered without a policy edit.
+block_on: [critical, high]
+
+# Honour the scanner's own overall verdict where it has one, rather than re-deriving it.
+trust_scanner_verdict: true
+
+# Used ONLY to order the results table, and labelled "display only" in the UI. A run's
+# decision never reads this.
+severity_rollup_penalty:
+  critical: 40
+  high: 20
+  medium: 8
+  low: 2
+  info: 0

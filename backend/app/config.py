@@ -41,7 +41,9 @@ class Settings:
     db_path: Path
     artifact_dir: Path
     workspace_dir: Path
-    policy_path: Path
+    # Directory holding the per-asset-class policy seed files (llm.yaml, mcp.yaml,
+    # skill.yaml). After first startup the governing copies live in the database.
+    policy_dir: Path
     fixtures_dir: Path
 
     @property
@@ -85,7 +87,7 @@ def get_settings() -> Settings:
         db_path=Path(os.environ.get("DB_PATH", data / "governance.db")),
         artifact_dir=Path(os.environ.get("ARTIFACT_DIR", data / "artifacts")),
         workspace_dir=Path(os.environ.get("WORKSPACE_DIR", data / "workspaces")),
-        policy_path=Path(os.environ.get("POLICY_PATH", _REPO_ROOT / "backend/policy/policy.yaml")),
+        policy_dir=Path(os.environ.get("POLICY_DIR", _REPO_ROOT / "backend/policy")),
         fixtures_dir=Path(
             os.environ.get("FIXTURES_DIR", _REPO_ROOT / "backend/tests/fixtures")
         ),

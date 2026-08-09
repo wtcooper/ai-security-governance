@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, Info, TriangleAlert } from "lucide-react";
+import { ArrowLeft, Info, Pin, TriangleAlert } from "lucide-react";
 import {
   fetchChecks,
   fetchGatewayStatus,
@@ -8,6 +8,7 @@ import {
   fetchPolicy,
   type AssetType,
 } from "@/lib/api";
+import { PolicyPanel } from "../../ui/policy-panel";
 import { ASSET } from "../../ui/vocabulary";
 import { ScannerForm } from "./scanner-form";
 import { SubmitForm } from "./submit-form";
@@ -62,36 +63,61 @@ export default async function EvaluatePage({ params }: { params: Promise<{ type:
             defaultSubject={policy?.default_subject_model ?? "gemma4"}
           />
 
+          <PolicyPanel assetType="llm" />
+
           <section className="space-y-3">
             <div>
               <h2 className="text-[15px] font-semibold tracking-tight">What gets measured</h2>
               <p className="mt-1 max-w-xl text-[12px] leading-relaxed text-muted">
-                One gate per benchmark, on that benchmark&apos;s own headline metric. Benchmarks
-                report other metrics too; those are recorded for inspection and never
-                thresholded.
+                One gate per benchmark, on that benchmark&apos;s own headline metric, over the
+                sample counts the policy sets. Benchmarks report other metrics too; those are
+                recorded for inspection and never thresholded. Click a benchmark for its
+                intent and real test cases.
               </p>
             </div>
 
             <div className="overflow-x-auto rounded-card border border-rule bg-surface">
-              <table className="w-full min-w-[36rem] border-collapse">
+              <table className="w-full min-w-[40rem] border-collapse">
                 <thead>
                   <tr className="border-b border-rule">
                     <th className="eyebrow px-5 py-2.5 text-left font-medium">Benchmark</th>
                     <th className="eyebrow px-5 py-2.5 text-left font-medium">Metric</th>
                     <th className="eyebrow px-5 py-2.5 text-left font-medium">Threshold</th>
+                    <th className="eyebrow px-5 py-2.5 text-left font-medium">Samples</th>
                     <th className="eyebrow px-5 py-2.5 text-left font-medium">Judge</th>
                   </tr>
                 </thead>
                 <tbody>
                   {(checks ?? []).map((check) => {
-                    const gate = policy?.llm_gates?.[check.id];
                     const arrow = check.direction === "higher_is_better" ? "≥" : "≤";
                     return (
                       <tr key={check.id} className="border-b border-rule last:border-0">
-                        <td className="tnum px-5 py-3 text-[12px]">{check.id}</td>
+                        <td className="px-5 py-3">
+                          <Link
+                            href={`/benchmarks/${check.id}`}
+                            className="tnum text-[12px] font-medium hover:underline"
+                          >
+                            {check.id}
+                          </Link>
+                          <div className="mt-0.5 max-w-xs text-[11px] leading-relaxed text-muted">
+                            {check.description}
+                          </div>
+                        </td>
                         <td className="px-5 py-3 text-[12px] text-muted">{check.metric}</td>
                         <td className="tnum px-5 py-3 text-[12px]">
-                          {gate ? `${arrow} ${gate.threshold}` : "—"}
+                          {check.threshold != null ? `${arrow} ${check.threshold}` : "—"}
+                        </td>
+                        <td className="px-5 py-3 text-[12px]">
+                          <span className="tnum">{check.planned_samples}</span>
+                          {check.uses_core_set && (
+                            <span
+                              className="ml-1.5 inline-flex items-center gap-0.5 text-[11px] font-medium text-pass"
+                              title="A fixed core set: the policy pins exact sample ids, so every run measures the same cases."
+                            >
+                              <Pin size={10} aria-hidden="true" />
+                              pinned
+                            </span>
+                          )}
                         </td>
                         <td className="px-5 py-3 text-[12px] text-muted">
                           {check.needs_judge ? "yes" : "no"}
@@ -117,6 +143,8 @@ export default async function EvaluatePage({ params }: { params: Promise<{ type:
       ) : (
         <>
           <ScannerForm assetType={assetType} analyzerModel={policy?.scanner_model ?? "gemma4"} />
+
+          <PolicyPanel assetType={assetType} />
 
           <section className="space-y-3">
             <div>

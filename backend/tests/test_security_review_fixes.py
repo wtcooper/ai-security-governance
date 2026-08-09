@@ -291,7 +291,7 @@ def test_scanner_environments_carry_no_provider_credentials(monkeypatch, tmp_pat
         db_path=tmp_path / "db.sqlite",
         artifact_dir=tmp_path / "artifacts",
         workspace_dir=tmp_path / "workspaces",
-        policy_path=tmp_path / "policy.yaml",
+        policy_dir=tmp_path / "policy",
         fixtures_dir=tmp_path / "fixtures",
     )
 

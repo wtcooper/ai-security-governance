@@ -28,6 +28,10 @@ import type { AssetType } from "@/lib/api";
 
 export type Tone = "pass" | "warn" | "block" | "neutral";
 
+/** A run's headline state. `spin` is set only while work is genuinely in flight, so a
+ *  stationary icon always means the run has stopped. */
+export type Verdict = { icon: LucideIcon; label: string; tone: Tone; spin?: boolean };
+
 export const TONE_TEXT: Record<Tone, string> = {
   pass: "text-pass",
   warn: "text-warn",
@@ -46,30 +50,36 @@ export const TONE_PANEL: Record<Tone, string> = {
 export const ASSET: Record<AssetType, { icon: LucideIcon; label: string; blurb: string }> = {
   llm: {
     icon: Cpu,
-    label: "Foundation model",
-    blurb: "A gateway model alias, or a Hugging Face repo for open weights",
+    label: "LLM",
+    blurb:
+      "Open-weights or frontier models — submitted as a gateway alias, or a Hugging Face repo for weight scans",
   },
   mcp: {
     icon: Server,
     label: "MCP server",
-    blurb: "A GitHub repository or a zip upload",
+    blurb: "A repository URL, or a zip upload for code behind an enterprise boundary",
   },
   skill: {
     icon: Puzzle,
     label: "Agent skill",
-    blurb: "A GitHub repository or a zip upload",
+    blurb: "A repository URL, or a zip upload for code behind an enterprise boundary",
   },
 };
 
 /** Decision states. The label always travels with the icon, so colour is never the only
  *  carrier of meaning (criterion 7.5). */
-export const DECISION: Record<string, { icon: LucideIcon; label: string; tone: Tone }> = {
+export const DECISION: Record<string, Verdict> = {
   auto_approve: { icon: ShieldCheck, label: "Auto-approve", tone: "pass" },
   needs_deep_testing: { icon: ShieldAlert, label: "Needs deep testing", tone: "warn" },
   error: { icon: ShieldX, label: "No decision", tone: "block" },
 };
 
-export const PENDING = { icon: CircleDashed, label: "Running", tone: "neutral" as Tone };
+export const PENDING: Verdict = {
+  icon: CircleDashed,
+  label: "Running",
+  tone: "neutral",
+  spin: true,
+};
 
 export const SEVERITY: Record<string, { icon: LucideIcon; tone: Tone; rank: number }> = {
   critical: { icon: CircleAlert, tone: "block", rank: 0 },
@@ -83,9 +93,11 @@ export const SEVERITY_ORDER = Object.keys(SEVERITY).sort(
   (a, b) => SEVERITY[a].rank - SEVERITY[b].rank,
 );
 
-export function decisionFor(decision: string | null, status: string) {
+export function decisionFor(decision: string | null, status: string): Verdict {
   if (status === "running" || status === "pending") return PENDING;
-  return (decision && DECISION[decision]) || { ...PENDING, label: "No decision" };
+  // A finished run with no recognised decision borrows the pending icon, but must not
+  // borrow its motion — a spinning icon on a stopped run reads as work still happening.
+  return (decision && DECISION[decision]) || { ...PENDING, label: "No decision", spin: false };
 }
 
 /** Provenance of a score: harvested from someone else, or measured here. */

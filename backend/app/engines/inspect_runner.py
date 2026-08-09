@@ -34,17 +34,16 @@ def build_child_env(settings: Settings) -> dict[str, str]:
     return env
 
 
-async def run_eval(
+def build_eval_argv(
     settings: Settings,
     task: str,
     model_alias: str,
-    judge_alias: str | None = None,
-    limit: int | None = None,
-    timeout: float = 900.0,
-) -> EvalResult:
-    log_dir = settings.artifact_dir / "inspect-logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-
+    judge_alias: str | None,
+    limit: int | None,
+    sample_ids: tuple[str, ...],
+    log_dir: str,
+) -> list[str]:
+    """The child's argv, as a pure function so tests can hold it to the policy's word."""
     argv = [
         sys.executable,
         "-m",
@@ -54,12 +53,34 @@ async def run_eval(
         "--model",
         settings.inspect_model_string(model_alias),
         "--log-dir",
-        str(log_dir),
+        log_dir,
     ]
     if judge_alias:
         argv += ["--judge-model", settings.inspect_model_string(judge_alias)]
     if limit is not None:
         argv += ["--limit", str(limit)]
+    # A fixed core set: the policy names exact dataset sample ids, and the run executes
+    # those and nothing else. Mutually exclusive with --limit by construction in jobs.py.
+    for sample_id in sample_ids:
+        argv += ["--sample-id", sample_id]
+    return argv
+
+
+async def run_eval(
+    settings: Settings,
+    task: str,
+    model_alias: str,
+    judge_alias: str | None = None,
+    limit: int | None = None,
+    sample_ids: tuple[str, ...] = (),
+    timeout: float = 900.0,
+) -> EvalResult:
+    log_dir = settings.artifact_dir / "inspect-logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    argv = build_eval_argv(
+        settings, task, model_alias, judge_alias, limit, sample_ids, str(log_dir)
+    )
 
     process = await asyncio.create_subprocess_exec(
         *argv,

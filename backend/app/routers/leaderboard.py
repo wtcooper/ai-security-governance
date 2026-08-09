@@ -13,7 +13,7 @@ from app import jobs
 from app.config import Settings, get_settings
 from app.db import get_session
 from app.models import Asset, AssetType, Run, RunStatus, Score
-from app.scoring.policy import get_policy
+from app.scoring.policy import get_active_policy
 
 router = APIRouter(tags=["leaderboard"])
 
@@ -29,6 +29,7 @@ class LeaderboardGate(BaseModel):
     direction: str | None
     passed: bool | None
     provenance: str
+    total_samples: int | None
 
 
 class LeaderboardRow(BaseModel):
@@ -49,6 +50,11 @@ class LeaderboardRow(BaseModel):
     policy_version: str | None
     gates_passed: int
     gates_total: int
+    # The smallest and largest sample counts behind the gated scores. Surfaced because a
+    # score over 2 samples must not read like a score over 1,000.
+    samples_min: int | None
+    samples_max: int | None
+    sample_override: int | None
     started_at: datetime
     finished_at: datetime | None
     gates: list[LeaderboardGate]
@@ -61,7 +67,7 @@ def leaderboard(
     session: SessionDep,
     limit: int = 100,
 ) -> list[LeaderboardRow]:
-    policy = get_policy(settings.policy_path)
+    policy = get_active_policy(session)
 
     statement = (
         select(Run, Asset)
@@ -75,6 +81,7 @@ def leaderboard(
     for run, asset in session.exec(statement):
         scores = list(session.exec(select(Score).where(Score.run_id == run.id)))
         gated = [s for s in scores if s.gated]
+        sample_counts = [s.total_samples for s in gated if s.total_samples is not None]
         rows.append(
             LeaderboardRow(
                 run_id=run.id,
@@ -93,6 +100,9 @@ def leaderboard(
                 # Denominator is the policy's gate count, not the number of scores recorded:
                 # "3 of 5" must stay visible when two checks never produced a score.
                 gates_total=len(policy.gates_for(asset_type)) or len(gated),
+                samples_min=min(sample_counts) if sample_counts else None,
+                samples_max=max(sample_counts) if sample_counts else None,
+                sample_override=run.sample_override,
                 started_at=run.started_at,
                 finished_at=run.finished_at,
                 gates=[
@@ -104,6 +114,7 @@ def leaderboard(
                         direction=s.direction.value if s.direction else None,
                         passed=s.passed,
                         provenance=s.provenance.value,
+                        total_samples=s.total_samples,
                     )
                     for s in gated
                 ],

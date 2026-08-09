@@ -30,7 +30,7 @@ from pathlib import Path
 from app.config import Settings
 from app.models import AssetType, Decision, Severity
 from app.scoring import gates
-from app.scoring.policy import get_policy
+from app.scoring.policy import load_policy_dir
 
 CORPORA = {
     "mcp": "https://github.com/cisco-ai-defense/mcp-scanner",
@@ -191,7 +191,7 @@ async def _scan_case(
 ) -> CaseResult:
     from app.engines import mcp_scanner, skill_scanner
 
-    policy = get_policy(settings.policy_path)
+    policy = load_policy_dir(settings.policy_dir)
     asset_type = AssetType.MCP if corpus == "mcp" else AssetType.SKILL
 
     try:
@@ -258,7 +258,7 @@ async def run_calibration(
     workspace = settings.workspace_dir / "calibration"
     workspace.mkdir(parents=True, exist_ok=True)
 
-    policy = get_policy(settings.policy_path)
+    policy = load_policy_dir(settings.policy_dir)
     report = CalibrationReport(
         started_at=datetime.now(UTC).isoformat(),
         corpus_revisions={},

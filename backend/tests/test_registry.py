@@ -24,8 +24,8 @@ import pytest
 
 from app.engines.registry import LLM_CHECKS, MetricScale, checks_for, get_check
 from app.models import AssetType, Direction
-from app.scoring.policy import load_policy
-from tests.test_gates import POLICY_PATH
+from app.scoring.policy import load_policy_dir
+from tests.test_gates import POLICY_DIR
 
 # Captured from live runs — see the module docstring.
 EXPECTED_METRIC_KEYS = {
@@ -132,14 +132,14 @@ def test_percent_scaled_metrics_are_declared_as_such():
 
 def test_every_policy_gate_has_a_registered_check():
     """A gate with no check can never be satisfied, which would block every run forever."""
-    policy = load_policy(POLICY_PATH)
+    policy = load_policy_dir(POLICY_DIR)
     registered = {check.id for check in LLM_CHECKS}
     assert set(policy.llm_gates) == registered
 
 
 def test_policy_metric_and_direction_agree_with_the_registry():
     """A disagreement here would threshold a different number than the one displayed."""
-    policy = load_policy(POLICY_PATH)
+    policy = load_policy_dir(POLICY_DIR)
     for check in LLM_CHECKS:
         gate = policy.llm_gates[check.id]
         assert gate.metric == check.metric_name, check.id
@@ -147,7 +147,7 @@ def test_policy_metric_and_direction_agree_with_the_registry():
 
 
 def test_composite_weights_cover_every_gate():
-    policy = load_policy(POLICY_PATH)
+    policy = load_policy_dir(POLICY_DIR)
     assert set(policy.composite_weights) == set(policy.llm_gates)
     assert sum(policy.composite_weights.values()) == pytest.approx(1.0)
 

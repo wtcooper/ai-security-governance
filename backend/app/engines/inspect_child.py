@@ -232,6 +232,7 @@ def run(
     judge_model: str | None,
     limit: int | None,
     log_dir: str,
+    sample_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     from inspect_ai import eval as inspect_eval
 
@@ -253,6 +254,9 @@ def run(
         task,
         model=model,
         limit=limit,
+        # A fixed core set from the policy: run exactly these dataset samples. Verified
+        # supported by installed inspect_ai 0.3.253 (`eval(sample_id=[...])`).
+        sample_id=list(sample_ids) if sample_ids else None,
         log_dir=log_dir,
         display="none",
         **({"model_roles": model_roles} if model_roles else {}),
@@ -314,6 +318,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--judge-model", default=None)
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument(
+        "--sample-id",
+        action="append",
+        dest="sample_ids",
+        default=None,
+        help="run exactly this dataset sample id; repeatable (the policy's fixed core set)",
+    )
     parser.add_argument("--log-dir", required=True)
     parser.add_argument("--out", default=None, help="also write the result JSON here")
     args = parser.parse_args(argv)
@@ -326,7 +337,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        result = run(args.task, args.model, args.judge_model, args.limit, args.log_dir)
+        result = run(
+            args.task, args.model, args.judge_model, args.limit, args.log_dir, args.sample_ids
+        )
     except Exception as exc:  # noqa: BLE001 - surfaced as JSON to the parent
         result = {"task": args.task, "status": "error", "error": f"{type(exc).__name__}: {exc}"}
 

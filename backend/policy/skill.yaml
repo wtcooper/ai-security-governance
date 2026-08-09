@@ -1,0 +1,25 @@
+# Agent skill governance policy — seed for version 1.
+#
+# Scanner-backed asset class: the scanner is the evaluation, and the gate is a severity
+# rule rather than a score — see mcp.yaml for the reasoning, which applies unchanged.
+#
+# After first startup the governing copy lives in the DATABASE, versioned and immutable —
+# edit it from the Policies page. This file only seeds an empty database.
+
+# advisory -> every result goes to human review; nothing is ever auto-approved.
+mode: advisory
+
+# skill-scanner DOES emit CRITICAL, so both entries here are live.
+block_on: [critical, high]
+
+# Honour skill-scanner's own `is_safe` verdict rather than re-deriving it.
+trust_scanner_verdict: true
+
+# Used ONLY to order the results table, and labelled "display only" in the UI. A run's
+# decision never reads this.
+severity_rollup_penalty:
+  critical: 40
+  high: 20
+  medium: 8
+  low: 2
+  info: 0

@@ -26,9 +26,9 @@ from app.engines.mcp_scanner import (
 from app.engines.skill_scanner import parse_findings as parse_skill_findings
 from app.models import AssetType, Decision, Severity
 from app.scoring import gates
-from app.scoring.policy import load_policy
+from app.scoring.policy import load_policy_dir
 
-POLICY_PATH = Path(__file__).resolve().parents[1] / "policy" / "policy.yaml"
+POLICY_DIR = Path(__file__).resolve().parents[1] / "policy"
 
 # Captured from a real `mcp-scanner behavioral --format raw` run on a poisoned server.
 MCP_BEHAVIORAL = {
@@ -106,7 +106,7 @@ SKILL_FINDINGS = {
 
 @pytest.fixture
 def policy():
-    return load_policy(POLICY_PATH)
+    return load_policy_dir(POLICY_DIR)
 
 
 # --- mcp-scanner -------------------------------------------------------------------------

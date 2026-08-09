@@ -29,7 +29,7 @@ COPY tests/fixtures ./fixtures
 ENV PATH="/srv/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     APP_DATA_DIR=/srv/data \
-    POLICY_PATH=/srv/policy/policy.yaml \
+    POLICY_DIR=/srv/policy \
     # Must match the COPY above. This is also one of the two roots a non-URL submission is
     # allowed to point at, so a wrong value here would make the fixtures unscannable rather
     # than merely misplaced.

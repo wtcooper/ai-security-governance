@@ -419,6 +419,39 @@ def create_version(
     return row
 
 
+def policy_for_run(session: Session, run, asset) -> Policy:
+    """The policy a recorded run must be interpreted under.
+
+    Gate outcomes and the composite are recomputed at read time, so they have to come from
+    the policy version the run actually recorded — otherwise editing a threshold, or adding a
+    benchmark to the suite, would silently rewrite the meaning of every historical run on
+    screen. Every view of a run resolves it through here, so the run page and the evaluations
+    table can never disagree about the same run.
+
+    Falls back to the active policy when the recorded version cannot be resolved (runs that
+    predate policy versioning, or whose content hash no longer matches). That fallback is
+    visible rather than silent: such a run's coverage is incomplete under the current suite,
+    so its composite is withheld rather than presented as a full result.
+    """
+    active = get_active_policy(session)
+    if not run.policy_version or not str(run.policy_version).isdigit():
+        return active
+    row = get_version(session, asset.type, int(run.policy_version))
+    if row is None or row.content_hash != run.policy_hash:
+        return active
+    docs: dict[AssetType, tuple[str, str]] = {}
+    for asset_type in AssetType:
+        if asset_type is asset.type:
+            docs[asset_type] = (row.content, str(row.version))
+        else:
+            newest = newest_version(session, asset_type)
+            docs[asset_type] = (newest.content, "current") if newest else ("{}", "current")
+    try:
+        return build_policy(docs)
+    except Exception:  # noqa: BLE001 - a historical document must never break a page
+        return active
+
+
 def get_active_policy(session: Session) -> Policy:
     """The policy that governs new runs: the newest version of each class document."""
     docs: dict[AssetType, tuple[str, str]] = {}

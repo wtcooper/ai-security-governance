@@ -316,3 +316,24 @@ def test_registry_declares_an_unresolved_counter_for_the_judged_mitre_check():
     from app.engines.registry import get_check
 
     assert get_check("cyse4_mitre").unresolved_metric_key == "mitre_scorer.else_count"
+
+
+def test_scanner_rows_are_ordered_by_their_severity_rollup():
+    """The results table promises the score column is a severity roll-up for scanner classes.
+
+    It previously read the benchmark composite for every row, which is only ever defined for
+    LLM runs — so the column was permanently empty for MCP and skills while the page claimed
+    otherwise. The roll-up is stored ungated on the run precisely to order these rows.
+    """
+    from app.models import AssetType
+
+    policy = load_policy_dir(POLICY_DIR)
+    penalty = policy.scanner[AssetType.MCP].severity_penalty
+
+    clean = normalize.severity_rollup({}, penalty)
+    one_high = normalize.severity_rollup({Severity.HIGH: 1}, penalty)
+    worse = normalize.severity_rollup({Severity.HIGH: 3}, penalty)
+
+    # A roll-up has to be defined (not None) and monotonic, or it cannot order anything.
+    assert clean is not None and one_high is not None
+    assert clean > one_high > worse, (clean, one_high, worse)

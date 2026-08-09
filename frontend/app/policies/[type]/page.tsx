@@ -1,12 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { BadgeCheck, History } from "lucide-react";
-import {
-  fetchPolicyForm,
-  fetchPolicyVersion,
-  fetchPolicyVersions,
-  type AssetType,
-} from "@/lib/api";
+import { fetchPolicyForm, fetchPolicyVersions, type AssetType } from "@/lib/api";
 import { ASSET } from "../../ui/vocabulary";
 import { PolicyEditor } from "./policy-editor";
 
@@ -39,11 +34,11 @@ export default async function PolicyPage({
   const requested = v ? Number(v) : versions[0].version;
   const selectedMeta =
     versions.find((entry) => entry.version === requested) ?? versions[0];
-  const [selected, form] = await Promise.all([
-    fetchPolicyVersion(assetType, selectedMeta.version),
-    fetchPolicyForm(assetType),
-  ]);
-  if (!selected) notFound();
+  // The form values for the SELECTED version, so a superseded policy is still inspectable —
+  // there is no YAML view to fall back on. The document itself is deliberately NOT fetched
+  // here: the editor never renders it, and passing it would ship the whole policy text into
+  // the client payload for nothing.
+  const form = await fetchPolicyForm(assetType, selectedMeta.version);
 
   return (
     <div className="space-y-8">
@@ -127,8 +122,8 @@ export default async function PolicyPage({
 
         <PolicyEditor
           assetType={assetType}
-          version={selected}
-          formValues={selected.is_active ? (form?.values ?? null) : null}
+          version={selectedMeta}
+          formValues={form?.values ?? null}
         />
       </div>
     </div>

@@ -13,7 +13,7 @@ from app import jobs
 from app.config import Settings, get_settings
 from app.db import get_session
 from app.models import Asset, AssetType, Run, RunStatus, Score
-from app.scoring.policy import get_active_policy
+from app.scoring.policy import policy_for_run
 
 router = APIRouter(tags=["leaderboard"])
 
@@ -67,8 +67,6 @@ def leaderboard(
     session: SessionDep,
     limit: int = 100,
 ) -> list[LeaderboardRow]:
-    policy = get_active_policy(session)
-
     statement = (
         select(Run, Asset)
         .join(Asset, Asset.id == Run.asset_id)
@@ -79,9 +77,25 @@ def leaderboard(
 
     rows: list[LeaderboardRow] = []
     for run, asset in session.exec(statement):
+        # Each row is interpreted under the policy that governed ITS run, not the active one:
+        # otherwise adding a benchmark to the suite would retroactively change the gate
+        # denominator and composite of every historical evaluation in this table.
+        run_policy = policy_for_run(session, run, asset)
         scores = list(session.exec(select(Score).where(Score.run_id == run.id)))
         gated = [s for s in scores if s.gated]
         sample_counts = [s.total_samples for s in gated if s.total_samples is not None]
+
+        # Scanner-backed classes have no benchmark composite; their ordering number is the
+        # severity roll-up recorded on the run. Reading it here is what makes the column
+        # match what the page says it shows — it was previously always empty for them.
+        if asset.type is AssetType.LLM:
+            score_value = jobs.composite_for_run(session, run.id, run_policy)
+        else:
+            rollup = next(
+                (s for s in scores if s.check_id == f"{asset.type.value}.severity_rollup"),
+                None,
+            )
+            score_value = rollup.raw_value if rollup else None
         rows.append(
             LeaderboardRow(
                 run_id=run.id,
@@ -91,7 +105,7 @@ def leaderboard(
                 status=run.status.value,
                 decision=run.decision.value if run.decision else None,
                 decision_reason=run.decision_reason,
-                composite_score=jobs.composite_for_run(session, run.id, policy),
+                composite_score=score_value,
                 judge_model=run.judge_model,
                 judge_unresolved_rate=run.judge_unresolved_rate,
                 judge_refusal_rate=run.judge_refusal_rate,
@@ -99,7 +113,7 @@ def leaderboard(
                 gates_passed=sum(1 for s in gated if s.passed),
                 # Denominator is the policy's gate count, not the number of scores recorded:
                 # "3 of 5" must stay visible when two checks never produced a score.
-                gates_total=len(policy.gates_for(asset_type)) or len(gated),
+                gates_total=len(run_policy.gates_for(asset_type)) or len(gated),
                 samples_min=min(sample_counts) if sample_counts else None,
                 samples_max=max(sample_counts) if sample_counts else None,
                 sample_override=run.sample_override,

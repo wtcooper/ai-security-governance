@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, Info, Pin, TriangleAlert } from "lucide-react";
+import { ArrowLeft, BookOpen, Info, Pin, Table2, TriangleAlert } from "lucide-react";
 import {
   fetchChecks,
   fetchGatewayStatus,
@@ -39,11 +39,29 @@ export default async function EvaluatePage({ params }: { params: Promise<{ type:
           <ArrowLeft size={13} aria-hidden="true" />
           Asset classes
         </Link>
-        <div className="flex items-center gap-2.5">
-          <Icon size={20} strokeWidth={1.75} aria-hidden="true" />
-          <h1 className="text-[26px] font-semibold leading-tight tracking-tight">
-            {asset.label}
-          </h1>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <Icon size={20} strokeWidth={1.75} aria-hidden="true" />
+            <h1 className="text-[26px] font-semibold leading-tight tracking-tight">
+              New {asset.label.toLowerCase()} evaluation
+            </h1>
+          </div>
+          <div className="flex gap-2">
+            <Link
+              href={`/criteria/${assetType}`}
+              className="inline-flex items-center gap-2 rounded border border-rule bg-surface px-3 py-1.5 text-[12px] font-medium transition-colors hover:border-ink"
+            >
+              <BookOpen size={13} strokeWidth={2} aria-hidden="true" />
+              Evaluation criteria
+            </Link>
+            <Link
+              href={`/leaderboard?type=${assetType}`}
+              className="inline-flex items-center gap-2 rounded border border-rule bg-surface px-3 py-1.5 text-[12px] font-medium text-muted transition-colors hover:border-ink hover:text-ink"
+            >
+              <Table2 size={13} strokeWidth={2} aria-hidden="true" />
+              Past evaluations
+            </Link>
+          </div>
         </div>
       </section>
 

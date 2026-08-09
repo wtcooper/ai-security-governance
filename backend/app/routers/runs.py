@@ -16,7 +16,7 @@ from app.engines import gateway
 from app.engines.registry import checks_for
 from app.models import Artifact, Asset, AssetType, Finding, Run, RunStatus, Score
 from app.scoring import gates
-from app.scoring.policy import get_active_policy
+from app.scoring.policy import get_active_policy, policy_for_run
 
 router = APIRouter(tags=["runs"])
 
@@ -269,38 +269,8 @@ def run_progress(run_id: int, settings: SettingsDep, session: SessionDep) -> dic
     }
 
 
-def _run_policy(session: Session, run: Run, asset: Asset):
-    """The policy to interpret this run under.
-
-    Gate outcomes are recomputed at read time, so they must come from the policy version the
-    run actually recorded — otherwise editing a threshold would silently rewrite the meaning
-    of every historical run on screen. Falls back to the active policy when the recorded
-    version cannot be resolved (runs that predate policy versioning)."""
-    from app.scoring import policy as policy_store
-    from app.scoring.policy import build_policy
-
-    active = get_active_policy(session)
-    if not run.policy_version or not run.policy_version.isdigit():
-        return active
-    row = policy_store.get_version(session, asset.type, int(run.policy_version))
-    if row is None or row.content_hash != run.policy_hash:
-        return active
-    docs = {
-        asset_type: (
-            (row.content, str(row.version))
-            if asset_type is asset.type
-            else (policy_store.newest_version(session, asset_type).content, "current")
-        )
-        for asset_type in AssetType
-    }
-    try:
-        return build_policy(docs)
-    except Exception:  # noqa: BLE001 - a historical doc must never 500 the run page
-        return active
-
-
 def _to_run_out(session: Session, run: Run, asset: Asset, settings: Settings) -> RunOut:
-    policy = _run_policy(session, run, asset)
+    policy = policy_for_run(session, run, asset)
     scores = list(session.exec(select(Score).where(Score.run_id == run.id)))
     findings = list(session.exec(select(Finding).where(Finding.run_id == run.id)))
     artifacts = list(session.exec(select(Artifact).where(Artifact.run_id == run.id)))

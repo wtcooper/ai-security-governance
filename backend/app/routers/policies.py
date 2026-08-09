@@ -121,11 +121,28 @@ def create_version(
 
 
 @router.get("/policies/{asset_type}/form")
-def form_values(asset_type: AssetType, session: SessionDep) -> dict:
-    """The active version's key settings, shaped for the form editor."""
-    row = policy_store.newest_version(session, asset_type)
+def form_values(
+    asset_type: AssetType, session: SessionDep, version: int | None = None
+) -> dict:
+    """A version's key settings, shaped for the form editor.
+
+    Defaults to the active version. Naming an older version renders its settings read-only,
+    which is how a superseded policy stays inspectable now that there is no YAML view.
+    """
+    row = (
+        policy_store.get_version(session, asset_type, version)
+        if version is not None
+        else policy_store.newest_version(session, asset_type)
+    )
     if row is None:
-        raise HTTPException(status_code=503, detail="policies are not seeded yet")
+        raise HTTPException(
+            status_code=404 if version is not None else 503,
+            detail=(
+                f"no {asset_type.value} policy version {version}"
+                if version is not None
+                else "policies are not seeded yet"
+            ),
+        )
     return {
         "asset_type": asset_type.value,
         "version": row.version,

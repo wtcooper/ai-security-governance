@@ -13,7 +13,7 @@ from app.models import Direction, Severity
 def normalize_metric(raw_value: float, direction: Direction) -> float:
     """Map a 0-1 rate onto a 0-100 "better is higher" scale.
 
-    Lower-is-better metrics are inverted so the leaderboard reads consistently: 100 is always
+    Lower-is-better metrics are inverted so the evaluations table reads consistently: 100 is always
     the good end, whichever direction the underlying metric runs.
     """
     clamped = min(max(raw_value, 0.0), 1.0)

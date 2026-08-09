@@ -23,7 +23,7 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
     <div className="space-y-10">
       <section className="space-y-3">
         <Link
-          href="/leaderboard"
+          href="/evaluations"
           className="inline-flex items-center gap-1.5 text-[12px] text-muted transition-colors hover:text-ink"
         >
           <ArrowLeft size={13} aria-hidden="true" />

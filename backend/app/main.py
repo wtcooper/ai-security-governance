@@ -11,7 +11,7 @@ from app.config import get_settings
 from app.db import init_db, session_scope
 from app.routers import (
     benchmarks,
-    leaderboard,
+    evaluations,
     policies,
     policy,
     preflight,
@@ -56,7 +56,7 @@ app.add_middleware(
 app.include_router(preflight.router, prefix="/api")
 app.include_router(selftest.router, prefix="/api")
 app.include_router(runs.router, prefix="/api")
-app.include_router(leaderboard.router, prefix="/api")
+app.include_router(evaluations.router, prefix="/api")
 app.include_router(policy.router, prefix="/api")
 app.include_router(uploads.router, prefix="/api")
 app.include_router(published.router, prefix="/api")

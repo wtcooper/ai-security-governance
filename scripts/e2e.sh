@@ -457,19 +457,19 @@ for s in sorted(gated, key=lambda x: x['check_id']):
         fail "run detail page" "missing:$MISSING_RUN"
     fi
 
-    # Leaderboard must show the run with its gate tally.
-    LB_OUT=$(curl -sf --max-time 20 "$BACKEND/api/leaderboard/llm" 2>&1)
+    # The evaluations table must show the run with its gate tally.
+    LB_OUT=$(curl -sf --max-time 20 "$BACKEND/api/evaluations/llm" 2>&1)
     if echo "$LB_OUT" | python3 -c "
 import json,sys
 rows=json.load(sys.stdin)
-assert rows, 'leaderboard empty after a completed run'
+assert rows, 'evaluations table empty after a completed run'
 r=rows[0]
 assert r['gates_total']==5, r['gates_total']
 assert r['composite_is_display_only'] is True
 " 2>/dev/null; then
-        pass "leaderboard reports the run with a 7-gate denominator"
+        pass "evaluations table reports the run with a 7-gate denominator"
     else
-        fail "leaderboard" "$LB_OUT"
+        fail "evaluations table" "$LB_OUT"
     fi
 else
     fail "create run" "$RUN_CREATE"

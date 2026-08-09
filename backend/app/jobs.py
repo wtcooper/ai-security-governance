@@ -277,7 +277,7 @@ async def _run_scanner_checks(settings: Settings, run_id: int, asset_type: Asset
             run.finished_at = _utcnow()
             session.add(run)
 
-        # Severity roll-up for leaderboard ordering only, stored ungated so the gate
+        # Severity roll-up for ordering the evaluations table only, stored ungated so the gate
         # evaluator cannot read it. The penalty table comes from this class's own policy.
         penalty = policy.scanner[asset_type].severity_penalty
         rollup = normalize.severity_rollup(result.severity_counts(), penalty)
@@ -568,7 +568,7 @@ def _finalize_run(
 
 
 def composite_for_run(session: Session, run_id: int, policy) -> float | None:
-    """Leaderboard number. Display only — `gates.py` never reads this.
+    """Ordering number for the evaluations table. Display only — `gates.py` never reads this.
 
     Returns None unless every gated benchmark produced a score. A composite over a subset is
     not comparable to one over the full suite, and showing "100" beside "1/5 gates" reads as

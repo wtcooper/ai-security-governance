@@ -143,7 +143,7 @@ def test_every_gate_declares_a_sample_count():
 @pytest.mark.parametrize("severity", ["critical", "high", "medium", "low", "info"])
 @pytest.mark.parametrize("asset_type", [AssetType.MCP, AssetType.SKILL])
 def test_severity_rollup_penalties_are_defined_for_every_severity(severity, asset_type):
-    """A missing penalty would silently weight a severity at zero in the leaderboard."""
+    """A missing penalty would silently weight a severity at zero when ordering evaluations."""
     from app.models import Severity
 
     policy = load_policy_dir(POLICY_DIR)

@@ -6,7 +6,7 @@ Invariants, each covered by a test:
 
 * **Only gated scores are read.** Benchmarks emit extra metrics (AgentDojo's benign utility,
   BLEU, Jaccard). Those are stored for a human, and this module never looks at them.
-* **The composite is never read.** It exists for the leaderboard only.
+* **The composite is never read.** It exists for display ordering only.
 * **Absence is never approval.** A missing required check, an unreliable judge, or a scanner
   error withholds approval rather than defaulting to it.
 * **Advisory mode cannot approve.** It can only ever return NEEDS_DEEP_TESTING.

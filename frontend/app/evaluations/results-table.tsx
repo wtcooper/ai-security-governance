@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, ChevronRight, FlaskConical, Search } from "lucide-react";
-import type { LeaderboardRow } from "@/lib/api";
+import type { EvaluationRow } from "@/lib/api";
 import { TONE_TEXT, decisionFor, type Tone } from "../ui/vocabulary";
 
 /**
@@ -35,7 +35,7 @@ const TONE_ACCENT: Record<Tone, string> = {
   neutral: "border-l-rule-strong",
 };
 
-export function ResultsTable({ rows }: { rows: LeaderboardRow[] }) {
+export function ResultsTable({ rows }: { rows: EvaluationRow[] }) {
   const [query, setQuery] = useState("");
   const [decisionFilter, setDecisionFilter] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("date");

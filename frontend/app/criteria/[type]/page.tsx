@@ -48,7 +48,7 @@ export default async function CriteriaPage({ params }: { params: Promise<{ type:
     <div className="space-y-10">
       <section className="space-y-3">
         <Link
-          href={`/leaderboard?type=${assetType}`}
+          href={`/evaluations?type=${assetType}`}
           className="inline-flex items-center gap-1.5 text-[12px] text-muted transition-colors hover:text-ink"
         >
           <ArrowLeft size={13} aria-hidden="true" />

@@ -1,4 +1,9 @@
-"""Leaderboard: latest decision per asset, ordered for scanning at a glance."""
+"""Completed evaluations for one asset class.
+
+Named for what it is. This was `leaderboard`, which implied a ranking — the wrong idea for a
+governance record, where the point is whether each asset cleared its own thresholds, not how
+assets compare to one another.
+"""
 
 from __future__ import annotations
 
@@ -15,13 +20,13 @@ from app.db import get_session
 from app.models import Asset, AssetType, Run, RunStatus, Score
 from app.scoring.policy import policy_for_run
 
-router = APIRouter(tags=["leaderboard"])
+router = APIRouter(tags=["evaluations"])
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 SessionDep = Annotated[Session, Depends(get_session)]
 
 
-class LeaderboardGate(BaseModel):
+class EvaluationGate(BaseModel):
     check_id: str
     metric: str
     raw_value: float | None
@@ -32,7 +37,7 @@ class LeaderboardGate(BaseModel):
     total_samples: int | None
 
 
-class LeaderboardRow(BaseModel):
+class EvaluationRow(BaseModel):
     run_id: int
     asset_name: str
     asset_type: AssetType
@@ -57,16 +62,16 @@ class LeaderboardRow(BaseModel):
     sample_override: int | None
     started_at: datetime
     finished_at: datetime | None
-    gates: list[LeaderboardGate]
+    gates: list[EvaluationGate]
 
 
-@router.get("/leaderboard/{asset_type}", response_model=list[LeaderboardRow])
-def leaderboard(
+@router.get("/evaluations/{asset_type}", response_model=list[EvaluationRow])
+def evaluations(
     asset_type: AssetType,
     settings: SettingsDep,
     session: SessionDep,
     limit: int = 100,
-) -> list[LeaderboardRow]:
+) -> list[EvaluationRow]:
     statement = (
         select(Run, Asset)
         .join(Asset, Asset.id == Run.asset_id)
@@ -75,7 +80,7 @@ def leaderboard(
         .limit(limit)
     )
 
-    rows: list[LeaderboardRow] = []
+    rows: list[EvaluationRow] = []
     for run, asset in session.exec(statement):
         # Each row is interpreted under the policy that governed ITS run, not the active one:
         # otherwise adding a benchmark to the suite would retroactively change the gate
@@ -97,7 +102,7 @@ def leaderboard(
             )
             score_value = rollup.raw_value if rollup else None
         rows.append(
-            LeaderboardRow(
+            EvaluationRow(
                 run_id=run.id,
                 asset_name=asset.name,
                 asset_type=asset.type,
@@ -120,7 +125,7 @@ def leaderboard(
                 started_at=run.started_at,
                 finished_at=run.finished_at,
                 gates=[
-                    LeaderboardGate(
+                    EvaluationGate(
                         check_id=s.check_id,
                         metric=s.metric,
                         raw_value=s.raw_value,

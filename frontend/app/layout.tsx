@@ -78,7 +78,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <Link href="/" className="text-muted transition-colors hover:text-ink">
                 Evaluate
               </Link>
-              <Link href="/leaderboard" className="text-muted transition-colors hover:text-ink">
+              <Link href="/evaluations" className="text-muted transition-colors hover:text-ink">
                 Results
               </Link>
               <Link href="/benchmarks" className="text-muted transition-colors hover:text-ink">
@@ -94,8 +94,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <main className="mx-auto max-w-5xl px-6 py-10">{children}</main>
         <footer className="mx-auto max-w-5xl px-6 pb-10">
           <p className="border-t border-rule pt-4 text-[11px] text-faint">
-            Security criteria only. Harmful-content and compliance evaluation are handled
-            separately.
+            Security criteria only — acceptable use and compliance are assessed separately.
           </p>
         </footer>
       </body>

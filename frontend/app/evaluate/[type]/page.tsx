@@ -54,7 +54,7 @@ export default async function EvaluatePage({ params }: { params: Promise<{ type:
               Evaluation criteria
             </Link>
             <Link
-              href={`/leaderboard?type=${assetType}`}
+              href={`/evaluations?type=${assetType}`}
               className="inline-flex items-center gap-2 rounded border border-rule bg-surface px-3 py-1.5 text-[12px] font-medium text-muted transition-colors hover:border-ink hover:text-ink"
             >
               <Table2 size={13} strokeWidth={2} aria-hidden="true" />

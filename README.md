@@ -273,6 +273,11 @@ skills produced zero findings.
 A third benign MCP server (`azure_tools`) **timed out at 900s**, which is the scan-time
 limitation below, measured rather than asserted.
 
+The skill corpus was run twice, independently, and produced **identical per-case outcomes** —
+same 15 detections, same 2 misses. Worth checking rather than assuming, because the LLM analyzer
+is a model and the judge-refusal rate elsewhere in this project does vary run to run. Both
+reports are committed under `data/calibration/`.
+
 ### What this does not establish
 
 - Recall is measured on one sample per MCP threat category, not all 141 servers.

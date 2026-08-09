@@ -15,7 +15,9 @@ services:
     # 4001 on the host: LiteLLM's conventional 4000 is often already taken by another
     # project's gateway, and silently colliding with one is worse than a neighbouring port.
     ports:
-      - "4001:4000"
+      # Bound to loopback. The gateway has no authentication beyond a shared bearer token,
+      # and this is a single-user local tool, so it has no business listening on the LAN.
+      - "127.0.0.1:4001:4000"
     environment:
       GATEWAY_API_KEY: ${GATEWAY_API_KEY:-sk-local}
       # Real upstream keys, read from ./.env. Absent keys are fine — the mock models and
@@ -42,7 +44,7 @@ services:
   backend:
     build: ./backend
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
       GATEWAY_BASE_URL: http://gateway:4000/v1
       GATEWAY_API_KEY: ${GATEWAY_API_KEY:-sk-local}
@@ -62,7 +64,7 @@ services:
   frontend:
     build: ./frontend
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       API_BASE_URL: http://backend:8000
     depends_on:
@@ -77,7 +79,7 @@ services:
     image: ollama/ollama:latest
     profiles: ["local-models"]
     ports:
-      - "11434:11434"
+      - "127.0.0.1:11434:11434"
     volumes:
       - ollama-models:/root/.ollama
 

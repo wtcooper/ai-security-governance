@@ -107,6 +107,88 @@ def test_clone_disables_symlink_checkout():
     assert "core.symlinks=false" in argv_source
 
 
+def test_clone_disables_submodules_with_the_boolean_flag_not_the_pathspec_form():
+    """The form of this flag matters, and a substring assertion missed it once already.
+
+    git documents `--[no-]recurse-submodules[=<pathspec>]`, so `--recurse-submodules=no` is
+    NOT a boolean — it enables submodule cloning and treats "no" as a pathspec. A submitted
+    repository with a submodule at path `no` would then have an arbitrary URL fetched from
+    .gitmodules, bypassing the forge allowlist entirely.
+
+    The previous test asserted `"--recurse-submodules=no" in source`, which is exactly why it
+    passed while the flag did the opposite of its intent.
+    """
+    import inspect
+
+    from app.engines import source
+
+    argv_source = inspect.getsource(source.clone_repo)
+    # Match the quoted argv token, not prose: the docstring above legitimately names the
+    # broken form, and asserting on raw text would trip over its own explanation.
+    assert '"--no-recurse-submodules"' in argv_source
+    assert '"--recurse-submodules=' not in argv_source, (
+        "the =<pathspec> form ENABLES submodules; use the --no- boolean"
+    )
+
+
+@pytest.mark.parametrize(
+    "payload,description",
+    [
+        ('{"scan_results": [{"tool_name": "eek}", "is_safe": false}], "n": 1}', "brace in a name"),
+        ('{"a": "}}}}", "scan_results": [], "b": 2}', "several braces in a string"),
+        ('{"a": "\\"}", "scan_results": [], "b": 3}', "escaped quote then brace"),
+    ],
+)
+def test_json_extraction_is_not_fooled_by_braces_inside_strings(payload, description):
+    """Both scanners echo submission-derived text into their reports.
+
+    Counting braces is not string-aware, so a `}` in a filename or a quoted source line ended
+    the object early — failing the parse, or worse yielding a shorter object that parses fine
+    and carries fewer findings than the scanner actually reported. That let a submission
+    influence how much of its own scan result survived.
+    """
+    import json as _json
+
+    from app.engines.mcp_scanner import _extract_json as mcp_extract
+    from app.engines.skill_scanner import _extract_json as skill_extract
+
+    expected = _json.loads(payload)
+    for extract in (mcp_extract, skill_extract):
+        assert extract(payload) == expected, description
+
+
+def test_json_extraction_still_skips_leading_noise():
+    """The reason the scanner output is scanned at all: LiteLLM chatter precedes the payload."""
+    from app.engines.mcp_scanner import _extract_json
+
+    noisy = 'LiteLLM.Info: give feedback\nnot json at all\n{"scan_results": [], "ok": true}'
+    assert _extract_json(noisy) == {"scan_results": [], "ok": True}
+
+
+def test_a_directory_named_requirements_txt_is_not_handed_to_pip_audit(tmp_path):
+    """pip-audit's project mode resolves and installs declared dependencies.
+
+    Pointing it at a submission-controlled directory would run a build backend on attacker
+    input, which is the one thing this tool must never do.
+    """
+    root = tmp_path / "src"
+    (root / "requirements.txt").mkdir(parents=True)
+    # A real manifest nested inside the attacker-named directory: skipping the directory
+    # alone left this reachable, which is how the first attempt at this fix fell short.
+    (root / "requirements.txt" / "pyproject.toml").write_text("[project]\nname='x'\n")
+
+    assert _find_requirements(root) is None
+
+
+def test_a_pyproject_is_never_handed_to_pip_audit(tmp_path):
+    """Only requirements.txt is accepted; pyproject.toml selects pip-audit's project mode."""
+    root = tmp_path / "src"
+    root.mkdir()
+    (root / "pyproject.toml").write_text("[project]\nname='x'\n")
+
+    assert _find_requirements(root) is None
+
+
 # --- Finding 2: SSRF — routability check and address pinning -----------------------------
 
 

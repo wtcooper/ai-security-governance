@@ -89,7 +89,11 @@ async def clone_repo(url: str, destination: Path, timeout: float = 300.0) -> Acq
         "--depth",
         "1",
         "--no-tags",
-        "--recurse-submodules=no",
+        # `--no-recurse-submodules`, NOT `--recurse-submodules=no`. git documents the flag as
+        # `--[no-]recurse-submodules[=<pathspec>]`, so the `=` form takes a PATHSPEC — passing
+        # `=no` turned submodule cloning ON and matched submodules at path "no", which would
+        # fetch an arbitrary URL from .gitmodules and bypass the forge allowlist entirely.
+        "--no-recurse-submodules",
         url,
         str(target),
         stdout=asyncio.subprocess.PIPE,

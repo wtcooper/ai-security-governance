@@ -180,20 +180,24 @@ async def scan_skill(
 
 
 def _extract_json(text: str) -> dict[str, Any] | None:
-    """Find the JSON document in stdout, which may be preceded by log lines."""
+    """Find the JSON document in stdout, which may be preceded by other output.
+
+    Uses `raw_decode` at each candidate `{` rather than counting braces. Brace counting is not
+    string-aware: a `}` inside a JSON string value — and both scanners echo submission-derived
+    text such as filenames and source lines into their reports — ends the object early. That
+    either fails the parse or, worse, yields a shorter object that happens to be valid and
+    carries fewer findings than the scanner actually reported.
+    """
+    decoder = json.JSONDecoder()
     start = text.find("{")
     while start != -1:
-        depth = 0
-        for index in range(start, len(text)):
-            if text[index] == "{":
-                depth += 1
-            elif text[index] == "}":
-                depth -= 1
-                if depth == 0:
-                    try:
-                        return json.loads(text[start : index + 1])
-                    except json.JSONDecodeError:
-                        break
+        try:
+            value, _ = decoder.raw_decode(text[start:])
+        except json.JSONDecodeError:
+            start = text.find("{", start + 1)
+            continue
+        if isinstance(value, dict):
+            return value
         start = text.find("{", start + 1)
     return None
 

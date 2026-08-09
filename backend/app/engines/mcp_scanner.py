@@ -120,24 +120,24 @@ async def _run(argv: list[str], env: dict[str, str], timeout: float) -> tuple[in
 
 
 def _extract_json(text: str) -> dict[str, Any] | None:
-    """Pull the JSON document out of stdout.
+    """Find the JSON document in stdout, which may be preceded by other output.
 
-    The scanner prints LiteLLM chatter before the payload, so we find the first balanced
-    object rather than assuming stdout is pure JSON.
+    Uses `raw_decode` at each candidate `{` rather than counting braces. Brace counting is not
+    string-aware: a `}` inside a JSON string value — and both scanners echo submission-derived
+    text such as filenames and source lines into their reports — ends the object early. That
+    either fails the parse or, worse, yields a shorter object that happens to be valid and
+    carries fewer findings than the scanner actually reported.
     """
+    decoder = json.JSONDecoder()
     start = text.find("{")
     while start != -1:
-        depth = 0
-        for index in range(start, len(text)):
-            if text[index] == "{":
-                depth += 1
-            elif text[index] == "}":
-                depth -= 1
-                if depth == 0:
-                    try:
-                        return json.loads(text[start : index + 1])
-                    except json.JSONDecodeError:
-                        break
+        try:
+            value, _ = decoder.raw_decode(text[start:])
+        except json.JSONDecodeError:
+            start = text.find("{", start + 1)
+            continue
+        if isinstance(value, dict):
+            return value
         start = text.find("{", start + 1)
     return None
 
@@ -390,9 +390,19 @@ def _find_requirements(source_path: Path) -> Path | None:
     arbitrary host file.
     """
     resolved_root = source_path.resolve()
-    for candidate in ("requirements.txt", "pyproject.toml"):
+    # requirements.txt ONLY. A pyproject.toml selects pip-audit's project mode, which resolves
+    # and installs declared dependencies — running a build backend on attacker input. A
+    # submission can also place a real pyproject.toml inside a directory it names
+    # "requirements.txt", so refusing the directory is not enough on its own; the file type
+    # we accept has to be the narrow one.
+    for candidate in ("requirements.txt",):
         for match in sorted(source_path.rglob(candidate)):
             if match.is_symlink():
+                continue
+            # A submission can contain a DIRECTORY named requirements.txt. Handing that to
+            # pip-audit selects its project mode, which resolves and installs declared
+            # dependencies — i.e. runs a build backend on attacker-controlled input.
+            if not match.is_file():
                 continue
             try:
                 match.resolve().relative_to(resolved_root)

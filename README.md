@@ -188,8 +188,53 @@ results. Everything below was run against this repository.
 
 ### Code review
 
-An automated security review of the codebase found **two MEDIUM issues, both real, both since
-fixed** with regression tests. Both were containment failures rather than crashes, which is the
+Two passes were run. A focused review first, then a multi-agent scan at high effort with an
+adversarial verification panel — which found that one of the first pass's *fixes* was itself
+broken.
+
+#### Second pass: multi-agent scan
+
+**Eight findings survived verification: four HIGH, three MEDIUM, one LOW.** The ones worth
+knowing about:
+
+- **`--recurse-submodules=no` did the opposite of its intent** (HIGH). git documents the flag as
+  `--[no-]recurse-submodules[=<pathspec>]`, so the `=` form takes a *pathspec* — passing `=no`
+  **enabled** submodule cloning and matched submodules at path `no`. A submitted repo could then
+  have an arbitrary URL fetched from `.gitmodules`, bypassing the four-forge allowlist entirely.
+  The regression test that should have caught this asserted the flag *string* appeared in the
+  source, which is exactly why it passed while the flag misbehaved. It now asserts the quoted
+  argv token and that the pathspec form is absent.
+
+- **Scanner output parsing could be manipulated by the submission** (HIGH). Both `_extract_json`
+  implementations counted braces without honouring JSON string quoting, and both scanners echo
+  submission-controlled text into their reports — a filename for the MCP path, a source line for
+  the skill path. A `}` inside that text ended the object early, so a submission could reduce or
+  void its own findings while the run recorded as a clean success. Replaced with `raw_decode`,
+  which is string-aware.
+
+- **pip-audit could be pointed at a project rather than a requirements file** (contested). A
+  submission can contain a *directory* named `requirements.txt`, or a `pyproject.toml`, either of
+  which selects pip-audit's project mode — resolving and installing declared dependencies, i.e.
+  running a build backend on attacker input. Two verifiers rated it exploitable, one refuted it on
+  an argparse detail. The missing type check was certain either way, so the input is now narrowed
+  to regular `requirements.txt` files only. Writing the test for this exposed that the first fix
+  was incomplete: skipping the directory still left a real `pyproject.toml` *inside* it reachable.
+
+- **The gateway image baked a default bearer token** while compose published every service on all
+  interfaces. The default is gone and all published ports are now bound to `127.0.0.1`, which is
+  where a single-user local tool with no authentication belongs.
+
+On the two fixes the scan was explicitly asked to attack rather than accept: **the SSRF pinning
+held and the symlink containment held**, three verifiers each. But the SSRF rewrite had *narrowed*
+its own predicate — moving to `is_global` silently dropped the `is_multicast` and `is_reserved`
+checks the previous version had, and admitted NAT64. No route existed (the compose network is
+IPv4-only, and the https-only rule blocks the plain-HTTP internal services), but a fix should not
+quietly reduce coverage, so those predicates are restored and NAT64 prefixes are now denied
+explicitly.
+
+#### First pass: focused review
+
+Found **two MEDIUM issues, both real, both since fixed** with regression tests. Both were containment failures rather than crashes, which is the
 class that matters here: this tool deliberately clones untrusted repositories and unzips
 untrusted archives, so the property under test is that a submission cannot reach beyond itself.
 
@@ -231,8 +276,9 @@ Recorded because what was examined and found safe is as informative as what was 
 - **Command and argument injection** — all five subprocess call sites use argument lists, never a
   shell. Submission-derived paths are absolute and server-rooted, and model aliases are wrapped
   into `openai-api/gateway/<alias>`, so neither can be parsed as a flag.
-- **SSRF via IP encodings** — decimal, octal, short-form, IPv4-mapped IPv6 and NAT64 forms are
-  normalised by resolution before the check and blocked.
+- **SSRF via IP encodings** — decimal, octal, short-form and IPv4-mapped IPv6 forms are
+  normalised by resolution before the check and blocked. NAT64 prefixes are denied explicitly
+  rather than by normalisation, which an earlier version of this list described incorrectly.
 - **Redirect handling** — redirects are followed manually with each hop re-validated, so an
   allowed host cannot bounce the fetch to a forbidden one.
 - **`hf_repo_id` interpolation** — reaches only the path of a URL whose scheme and host are
@@ -280,6 +326,14 @@ reports are committed under `data/calibration/`.
 
 ### What this does not establish
 
+- **The scan did not finish cleanly.** A session limit killed 12 of 34 researchers mid-run; only
+  the two areas named above were re-run. `backend/app/scoring/`, `gateway/` and the deploy
+  configuration were never audited, and **no secrets sweep ran** — nothing here verifies that no
+  credential is committed anywhere. Sixteen further candidate sites fell below the verification
+  cap and are recorded as open questions rather than findings.
+- Conclusively cleared, for what it is worth: the startup DDL in `db.py` (all interpolants are
+  compile-time constants from `models.py`), and frontend XSS (every submission-derived string
+  lands as an escaped JSX text child, no raw-HTML sink anywhere).
 - Recall is measured on one sample per MCP threat category, not all 141 servers.
 - The false-positive denominators are 2 and 4. Enough to show the skill rule discriminates and
   that the MCP rule does not yet; nowhere near enough to justify auto-approval.

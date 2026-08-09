@@ -69,6 +69,10 @@ def validate_url(url: str) -> str:
 EXTRA_DENY = (
     ipaddress.ip_network("192.88.99.0/24"),
     ipaddress.ip_network("2002::/16"),
+    # NAT64: an embedded IPv4 address here is reachable through a translator, so a
+    # well-known-prefix form can carry an internal v4 destination past a v6 check.
+    ipaddress.ip_network("64:ff9b::/96"),
+    ipaddress.ip_network("64:ff9b:1::/48"),
 )
 
 
@@ -82,7 +86,15 @@ def _require_public(host: str, address: ipaddress.IPv4Address | ipaddress.IPv6Ad
 
     EXTRA_DENY then handles the cases `is_global` still allows.
     """
-    if not address.is_global or any(address in network for network in EXTRA_DENY):
+    narrowed = (
+        # Restored after review: switching to is_global alone silently DROPPED these two,
+        # which the previous predicate list did catch. No route exists in this deployment
+        # (the compose network is IPv4-only and https-only blocks the plain-HTTP internal
+        # services), but a fix should not quietly reduce coverage.
+        address.is_multicast
+        or address.is_reserved
+    )
+    if not address.is_global or narrowed or any(address in network for network in EXTRA_DENY):
         raise UnsafeUrlError(
             f"host {host!r} resolves to {address}, which is not a globally routable address. "
             "Refusing so this endpoint cannot be used to reach internal services, link-local "

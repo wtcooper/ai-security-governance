@@ -15,8 +15,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY litellm_config.yaml mock_handlers.py ./
 
-ENV GATEWAY_API_KEY=sk-local \
-    OLLAMA_API_BASE=http://host.docker.internal:11434
+# No default for GATEWAY_API_KEY. Baking one into the image gives every copy of it the same
+# known bearer token, and compose publishes this service on all interfaces — so a shipped
+# default is a credential anyone on the network already knows. start_proxy.sh supplies a
+# development value; a deployment must set its own.
+ENV OLLAMA_API_BASE=http://host.docker.internal:11434
 
 EXPOSE 4000
 

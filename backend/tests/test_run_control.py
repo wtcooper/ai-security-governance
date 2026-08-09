@@ -111,3 +111,53 @@ def test_grouped_metric_extras_do_not_collide():
     assert f"{check.id}::utility.accuracy" in ids, "utility must stay identifiable"
     # The gated metric is not duplicated into the extras.
     assert f"{check.id}::security.accuracy" not in ids
+
+
+def test_progress_reports_the_suite_the_run_was_started_under(tmp_path):
+    """A run's progress must agree with its own gate table, not with the current suite.
+
+    Progress used to resolve the ACTIVE policy while the run page and the evaluations table
+    resolved the run's recorded one. Retiring a benchmark therefore made a completed run
+    report seven benchmarks on one part of the page and eight on another.
+    """
+    from pathlib import Path
+
+    from sqlmodel import Session, SQLModel, create_engine
+
+    from app.models import Asset, AssetType
+    from app.scoring import policy as policy_store
+    from app.scoring.policy import policy_for_run, seed_policies
+
+    policy_dir = Path(__file__).resolve().parents[1] / "policy"
+    engine = create_engine(f"sqlite:///{tmp_path / 'progress.db'}")
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as session:
+        seed_policies(session, policy_dir)
+        v1 = policy_store.newest_version(session, AssetType.LLM)
+
+        asset = Asset(type=AssetType.LLM, name="subject", identifier="alias")
+        session.add(asset)
+        session.commit()
+        session.refresh(asset)
+        run = Run(
+            asset_id=asset.id,
+            status=RunStatus.COMPLETE,
+            policy_version=str(v1.version),
+            policy_hash=v1.content_hash,
+        )
+        session.add(run)
+        session.commit()
+
+        original = len(policy_for_run(session, run, asset).llm_gates)
+
+        # Retire a benchmark, creating a smaller active suite.
+        from tests.test_policy_versions import _drop_gate
+
+        policy_store.create_version(
+            session, AssetType.LLM, _drop_gate(v1.content, "atb_memory_poison"), "retire one"
+        )
+
+        resolved = policy_for_run(session, run, asset)
+        assert len(resolved.llm_gates) == original, (
+            "the run's progress suite must not shrink when the active suite does"
+        )

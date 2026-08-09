@@ -229,7 +229,10 @@ def run_progress(run_id: int, settings: SettingsDep, session: SessionDep) -> dic
 
     from app.engines.progress import collect_progress
 
-    policy = get_active_policy(session)
+    # The run's OWN policy, not the active one: a run started under a suite of eight
+    # benchmarks must keep reporting eight, or its progress silently disagrees with the gate
+    # table on the same page after the suite is edited.
+    policy = policy_for_run(session, run, asset)
     # Only policy-gated checks run, so those are the ones to report progress for.
     checks = tuple(c for c in checks_for(AssetType.LLM) if c.id in policy.llm_gates)
     planned: dict[str, int] = {}

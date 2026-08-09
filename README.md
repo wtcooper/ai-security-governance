@@ -141,13 +141,20 @@ docker compose up --build
 | API docs | http://localhost:8000/docs |
 | Model gateway | http://localhost:4001/health/readiness |
 
-### No API keys required
+### The bundled gateway is an example, not a recommendation
 
-The bundled gateway ships mock model routes, so a clean checkout with an empty `.env` boots and
-passes preflight with **no API key of any kind**. For real evaluation, point it at local models
-(Ollama) or any OpenAI-compatible endpoint.
+`gateway/litellm_config.yaml` exists so a clean checkout **runs**. It wires up a couple of
+small local models through [Ollama](https://ollama.com) and nothing more — enough to prove the
+plumbing end to end and to develop against for free. It is a demonstration of *how* to point
+this tool at models, not a suggestion of *which* models to use.
 
-Local models are the default, so development and the entire test suite cost nothing.
+**A real deployment replaces it.** Model choice ages badly, and yours will depend on what your
+organisation actually serves, what your judge budget is, and which models you are being asked
+to onboard. Expect a production gateway config to be considerably more involved than the
+example: real routing, credentials, rate limits, fallbacks and cost controls.
+
+A clean checkout with an empty `.env` boots and passes preflight with **no API key of any
+kind**, so you can see the app work before deciding anything about models.
 
 ## Bring your own models
 
@@ -163,24 +170,25 @@ Point those at a corporate LiteLLM instance, a local vLLM server, or `api.openai
 nothing else changes. A direct provider key is *supported*, never *assumed*.
 
 One gateway drives all three compute engines. Models are configured in
-`gateway/litellm_config.yaml` as aliases; the app only ever sees the alias:
+`gateway/litellm_config.yaml` as **aliases**, and the app only ever sees the alias — so
+swapping the model behind `judge` or behind a subject alias is a gateway change that the
+governance layer never notices. Two roles need filling:
 
-| Alias | Role |
+| Role | What it needs |
 |---|---|
-| `gemma4`, `gemma4-e2b` | default subject model (local Ollama) |
-| `qwen35` | default judge (local Ollama) |
-| `gpt-5.6-luna`, `gemini-3.5-flash-lite` | optional hosted judges for calibration |
-| `mock-target-*`, `mock-judge` | zero-key boot proof |
+| **Subject** | The model under evaluation. Whatever you are deciding about. |
+| **Judge** | Grades open-ended answers for the three judged benchmarks. Needs to be capable enough to follow a grading rubric on security content, and it must not refuse it — a judge that will not grade silently corrupts scores, which is why its reliability is measured and can void a run. |
 
-> **Alias rule:** no slashes or colons. Inspect parses model strings as
-> `openai-api/<provider>/<model>`, so `gemma4:e2b` is aliased to `gemma4-e2b`.
+> **Alias rule:** no slashes or colons in an alias. Inspect parses model strings as
+> `openai-api/<provider>/<model>` and splits on `/`, so an upstream name of the common
+> `family:variant` form needs an alias like `family-variant`.
 
 Two safeguards keep the "no provider assumptions" claim true rather than aspirational:
 
 - The UI offers a **dropdown of gateway aliases**, never a free-text model field.
 - **Preflight runs a real completion for the subject and the judge** before any run starts, and
   returns the upstream error body verbatim on failure. Judge routing is the usual breakage:
-  `inspect_evals` tasks default their graders to a hardcoded `openai/gpt-4o-mini`, so the eval
+  `inspect_evals` tasks default their graders to a hardcoded provider model, so the eval
   subprocess is launched with every provider credential stripped and those defaults overridden.
 
 ## Architecture
@@ -242,10 +250,14 @@ reports recall, plus a false-positive rate with its denominator attached.
 |---|---|---|
 | `GATEWAY_BASE_URL` | `http://gateway:4000/v1` | OpenAI-compatible endpoint |
 | `GATEWAY_API_KEY` | `sk-local` | bearer token for the above |
-| `DEFAULT_SUBJECT_MODEL` | `gemma4` | pre-selected model in the UI |
-| `DEFAULT_JUDGE_MODEL` | `qwen35` | grader for judged benchmarks |
-| `SCANNER_MODEL` | `gemma4` | LLM analyzer for the Cisco scanners |
-| `OPENAI_API_KEY`, `GEMINI_API_KEY` | — | consumed by the gateway only |
+| `DEFAULT_SUBJECT_MODEL` | a local alias | pre-selected model in the submit form. Deliberately a local one, so a mis-click cannot start a billed run |
+| `DEFAULT_JUDGE_MODEL` | a local alias | grader for the judged benchmarks |
+| `SCANNER_MODEL` | a local alias | analyzer the MCP/skill scanners use |
+| provider keys | — | read by the **gateway only**, never by the app. Which ones depends entirely on your gateway config |
+
+The three model variables take **gateway aliases**, not provider-native model strings. Their
+shipped defaults point at the example config's local models so a fresh checkout costs nothing;
+set them to whatever your own gateway serves.
 
 Governance policies are **versioned documents in the database**, one per asset class, edited
 from the Policies page (or `POST /api/policies/{class}/versions`). Every edit creates a new

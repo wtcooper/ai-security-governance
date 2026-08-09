@@ -1,5 +1,12 @@
-# Bundled LiteLLM AI gateway — the single OpenAI-compatible surface every compute engine
+# EXAMPLE LiteLLM gateway config — the single OpenAI-compatible surface every compute engine
 # in this project talks to (Inspect AI, mcp-scanner, skill-scanner).
+#
+# THIS FILE IS A DEMONSTRATION, NOT A RECOMMENDATION. It exists so a clean checkout runs: a
+# few small local models to develop against for free, plus mock routes so the stack boots and
+# passes preflight with no API key at all. Which models belong here depends entirely on what
+# your organisation serves and what you are being asked to onboard, and any specific model
+# named below will be dated quickly. Expect a real deployment to replace this wholesale, with
+# actual routing, credentials, rate limits, fallbacks and cost controls.
 #
 # Nothing in the app ever holds a provider-native model string or a direct provider key.
 # The app only ever sees the `model_name` aliases below. Swap the upstreams here and the

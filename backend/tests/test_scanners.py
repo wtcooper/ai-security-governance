@@ -277,3 +277,85 @@ def _module_arg(relative: str) -> str | None:
     text = path.read_text()
     match = re.search(r'"-m",\s*(?:#[^\n]*\n\s*)*(?:#[^\n]*\n\s*)*"([\w.]+)"', text)
     return match.group(1) if match else None
+
+
+def test_an_empty_scan_root_is_a_failure_not_a_clean_result(tmp_path, monkeypatch):
+    """The most dangerous possible outcome: "no findings" over a tree nobody read.
+
+    This happened for real. An uploaded GitHub zip nests everything under `repo-branch/`, so
+    the scan root contained a single directory and zero source files. The scanner ran, returned
+    zero findings, and the run reported "No blocking findings" — indistinguishable from a
+    genuinely clean server. The nesting is fixed in source.py; this asserts the guard that
+    makes an empty scan root loud if anything else ever produces one.
+    """
+    import asyncio
+
+    from app.config import Settings
+    from app.engines import mcp_scanner
+
+    settings = Settings(
+        gateway_base_url="http://gateway:4000/v1",
+        gateway_api_key="sk-local",
+        gateway_provider="gateway",
+        default_judge_model="judge",
+        default_subject_model="subject",
+        scanner_model="analyzer",
+        db_path=tmp_path / "db.sqlite",
+        artifact_dir=tmp_path / "artifacts",
+        workspace_dir=tmp_path / "workspaces",
+        policy_dir=tmp_path / "policy",
+        fixtures_dir=tmp_path / "fixtures",
+    )
+
+    # The exact shape the bug produced: a scan root holding only a directory.
+    empty_root = tmp_path / "src"
+    (empty_root / "playwright-mcp-main").mkdir(parents=True)
+
+    async def fail_if_invoked(*args, **kwargs):  # pragma: no cover - must not run
+        raise AssertionError("the scanner must not be invoked on an empty scan root")
+
+    monkeypatch.setattr(mcp_scanner, "_run", fail_if_invoked)
+
+    result = asyncio.run(mcp_scanner.scan_source(settings, empty_root))
+    assert result.ok is False, "an empty scan root must not report success"
+    assert not result.findings
+    assert any("nothing was examined" in e for e in result.errors), result.errors
+
+
+# --- "nothing to analyse" must never read as "nothing found" -------------------------------
+
+
+def test_no_mcp_functions_found_is_unassessed_not_safe():
+    """The systematic false negative: an unassessed server reading as a clean one.
+
+    The scanner emits a synthetic result, "No MCP functions found", with `is_safe: true` —
+    true from its point of view, since nothing it examined was unsafe. Taken at face value the
+    run reported "No blocking findings", identical to a genuinely clean server. Observed on a
+    real upload whose `src/` contained only a README.
+    """
+    from app.engines.mcp_scanner import behavioral_found_nothing_to_analyse
+
+    nothing = {"scan_results": [{"tool_name": "No MCP functions found", "is_safe": True}]}
+    assert behavioral_found_nothing_to_analyse(nothing)
+    assert behavioral_found_nothing_to_analyse({"scan_results": []})
+    assert behavioral_found_nothing_to_analyse({})
+
+    # A real analysis, clean or not, must NOT be treated as unassessed.
+    real_clean = {"scan_results": [{"tool_name": "browser_click", "is_safe": True}]}
+    assert not behavioral_found_nothing_to_analyse(real_clean)
+    real_unsafe = {
+        "scan_results": [
+            {"tool_name": "No MCP functions found", "is_safe": True},
+            {"tool_name": "exfiltrate", "is_safe": False},
+        ]
+    }
+    assert not behavioral_found_nothing_to_analyse(real_unsafe)
+
+
+def test_an_unassessed_scan_yields_no_verdict_rather_than_a_safe_one():
+    """`scanner_says_safe` must be None, not True, so the gate cannot approve on it."""
+    from app.engines.mcp_scanner import parse_behavioral
+
+    findings, tools, safe = parse_behavioral({"scan_results": []})
+    assert findings == [] and tools == 0
+    assert safe is None, "no results means no verdict, not a safe verdict"

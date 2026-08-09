@@ -170,7 +170,42 @@ def extract_zip(archive: Path, destination: Path) -> AcquiredSource:
 
         zf.extractall(target)
 
-    return AcquiredSource(path=target, kind="zip", origin=archive.name)
+    return AcquiredSource(path=_strip_single_root(target), kind="zip", origin=archive.name)
+
+
+def _strip_single_root(extracted: Path) -> Path:
+    """Descend into a lone top-level directory, if that is all the archive contains.
+
+    `zip -r thing.zip thing/` — the way essentially every archive of a project is made — nests
+    everything under one folder. Pointing a scanner at the extraction root then finds an empty
+    directory containing one subdirectory: no SKILL.md, no manifest, no source files, and the
+    scan fails with "no markdown found" on a submission that is perfectly well formed. A git
+    clone puts contents at the root, which is why repositories worked and uploads did not.
+
+    Containment is preserved: the descent target is a direct child of the extraction directory
+    and must be a real directory, not a symlink, so this cannot walk out of the workspace.
+    Nesting is only stripped one level at a time and only while the level is unambiguous, so an
+    archive with real content at its root is never second-guessed.
+    """
+    # ONLY `__MACOSX` is ignored when counting, and deliberately nothing else. It is metadata
+    # the macOS archiver injects — AppleDouble resource forks, never submission content — and
+    # ignoring it is what makes Mac-made archives work at all, since they almost always contain
+    # `__MACOSX/` alongside the real folder. Dotfiles are NOT ignored: treating `.env` as
+    # invisible for counting purposes would let a submission place content at the archive root
+    # and have it silently excluded from the scan, which is a hiding vector rather than a
+    # convenience.
+    current = extracted
+    # A bound rather than `while True`: a pathological archive of deeply nested single folders
+    # should not turn into an unbounded walk.
+    for _ in range(8):
+        entries = [e for e in current.iterdir() if e.name != "__MACOSX"]
+        if len(entries) != 1:
+            return current
+        only = entries[0]
+        if only.is_symlink() or not only.is_dir():
+            return current
+        current = only
+    return current
 
 
 def resolve_submission_path(origin: str, allowed_roots: list[Path]) -> Path:

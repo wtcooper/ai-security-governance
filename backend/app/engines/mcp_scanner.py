@@ -142,6 +142,29 @@ def _extract_json(text: str) -> dict[str, Any] | None:
     return None
 
 
+# The scanner emits this as a synthetic `tool_name` when it could not locate any MCP tool
+# definitions to analyse — and pairs it with `is_safe: true`, because from its point of view
+# nothing it examined was unsafe. Taken at face value that becomes "no blocking findings",
+# which is how an unassessed server reads as a clean one.
+NOTHING_ANALYSED_MARKER = "no mcp functions found"
+
+
+def behavioral_found_nothing_to_analyse(payload: dict[str, Any]) -> bool:
+    """True when the scanner located no MCP tool definitions at all.
+
+    Observed for real on an uploaded repository archive whose `src/` held only a README: the
+    scanner reported one synthetic result, "No MCP functions found", `is_safe: true`, and the
+    run came back "No blocking findings" — indistinguishable from a genuinely clean server.
+    A scan with nothing to analyse is UNASSESSED, and unassessed is not safe.
+    """
+    results = payload.get("scan_results") or []
+    if not results:
+        return True
+    return all(
+        NOTHING_ANALYSED_MARKER in str(entry.get("tool_name", "")).lower() for entry in results
+    )
+
+
 def parse_behavioral(payload: dict[str, Any]) -> tuple[list[ScanFinding], int, bool | None]:
     """Turn scan_results into findings, preserving analyzer attribution."""
     findings: list[ScanFinding] = []
@@ -215,6 +238,22 @@ async def scan_source(
     env = scanner_env(settings)
     result = McpScanResult(ok=True, engine_version=_engine_version())
 
+    # A scan that examined nothing must never read as a scan that found nothing. This fired
+    # for real: an uploaded GitHub zip nests everything under `repo-branch/`, so the scan root
+    # held one directory and no source files, the scanner returned zero findings, and the run
+    # reported "no blocking findings" — a clean-looking verdict over a tree nobody had read.
+    # The nesting itself is handled in source.py; this is the guard that makes the failure
+    # loud if any other path ever produces an empty scan root.
+    if not _source_files(source_path):
+        result.ok = False
+        result.errors.append(
+            "no analysable source files were found at the scan root, so nothing was "
+            "examined. This is reported as a failure rather than a clean result. If this was "
+            "an upload, check the archive contains the server's source rather than a nested "
+            "wrapper directory."
+        )
+        return result
+
     scan_target, skipped = _bounded_target(source_path, max_source_files)
     if skipped:
         result.findings.append(
@@ -245,6 +284,18 @@ async def scan_source(
         result.errors.append(
             f"behavioral scan produced no JSON (exit {code}): "
             f"{(stderr or stdout)[-600:]}"
+        )
+    elif behavioral_found_nothing_to_analyse(payload):
+        # Nothing was analysed, so there is no verdict to report — not a clean one.
+        result.ok = False
+        result.scanner_says_safe = None
+        result.raw["behavioral"] = payload
+        result.errors.append(
+            "the scanner found no MCP tool definitions to analyse, so this submission is "
+            "UNASSESSED rather than clean. Common causes: the archive contains packaging and "
+            "tests but not the server implementation (check whether its source directory is "
+            "populated, or is a git submodule that a zip download leaves empty), or the tools "
+            "are generated at build time and are not present in source."
         )
     else:
         findings, tools, safe = parse_behavioral(payload)

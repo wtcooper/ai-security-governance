@@ -233,3 +233,6 @@ next-env.d.ts
 # Playwright MCP scratch output
 .playwright-mcp/
 CLAUDE-SECURITY-*/
+
+
+temp/

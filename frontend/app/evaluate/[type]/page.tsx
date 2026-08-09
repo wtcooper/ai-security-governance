@@ -8,7 +8,6 @@ import {
   fetchPolicy,
   type AssetType,
 } from "@/lib/api";
-import { PolicyPanel } from "../../ui/policy-panel";
 import { ASSET } from "../../ui/vocabulary";
 import { ScannerForm } from "./scanner-form";
 import { SubmitForm } from "./submit-form";
@@ -80,8 +79,6 @@ export default async function EvaluatePage({ params }: { params: Promise<{ type:
             defaultJudge={policy?.judge.default_model ?? "qwen35"}
             defaultSubject={policy?.default_subject_model ?? "gemma4"}
           />
-
-          <PolicyPanel assetType="llm" />
 
           <section className="space-y-3">
             <div>
@@ -161,8 +158,6 @@ export default async function EvaluatePage({ params }: { params: Promise<{ type:
       ) : (
         <>
           <ScannerForm assetType={assetType} analyzerModel={policy?.scanner_model ?? "gemma4"} />
-
-          <PolicyPanel assetType={assetType} />
 
           <section className="space-y-3">
             <div>

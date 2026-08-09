@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { BookOpen, Info, Plus } from "lucide-react";
 import { fetchLeaderboard, fetchPolicy, type AssetType } from "@/lib/api";
-import { PolicyPanel } from "../ui/policy-panel";
 import { ASSET } from "../ui/vocabulary";
 import { ResultsTable } from "./results-table";
 
@@ -76,8 +75,6 @@ export default async function LeaderboardPage({
           New evaluation
         </Link>
       </div>
-
-      <PolicyPanel assetType={active} />
 
       {active !== "llm" && scanner?.mode === "advisory" && (
         <p className="flex gap-2 rounded-card border border-rule bg-surface px-4 py-3 text-[12px] leading-relaxed text-muted">

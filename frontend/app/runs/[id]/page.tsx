@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, Check, FileJson, FlaskConical, X } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, Check, FileJson, FlaskConical, X } from "lucide-react";
 import { fetchRun, type Run } from "@/lib/api";
 import { Term } from "../../ui/term";
 import { ThresholdRule } from "../../ui/threshold-rule";
@@ -296,7 +296,7 @@ function Findings({ run }: { run: Run }) {
 }
 
 function Provenance({ run }: { run: Run }) {
-  const rows: [string, React.ReactNode, string][] = [
+  const rows: [string, React.ReactNode, React.ReactNode][] = [
     ["subject", <span key="l">Subject model</span>, run.gateway_model ?? "—"],
     [
       "judge",
@@ -336,7 +336,19 @@ function Provenance({ run }: { run: Run }) {
         label="Policy"
         tip="The exact immutable policy version (and content hash) that governed this run. Later edits create new versions and never change what this run meant."
       />,
-      run.policy_version ? `v${run.policy_version} · ${run.policy_hash}` : "—",
+      // Linked, because "which policy judged this" is the question a reviewer follows —
+      // and it must resolve to the exact version, not whatever is active today.
+      run.policy_version ? (
+        <Link
+          href={`/policies/${run.asset_type}?v=${run.policy_version}`}
+          className="inline-flex items-center gap-1 hover:underline"
+        >
+          v{run.policy_version} · {run.policy_hash}
+          <ArrowUpRight size={11} className="text-faint" aria-hidden="true" />
+        </Link>
+      ) : (
+        "—"
+      ),
     ],
     ["engine", <span key="l">Scanner engine</span>, run.engine_version ?? "n/a"],
     ["ruleset", <span key="l">Ruleset</span>, run.ruleset_version ?? "n/a"],
@@ -348,7 +360,8 @@ function Provenance({ run }: { run: Run }) {
         <h2 className="text-[15px] font-semibold tracking-tight">Run provenance</h2>
         <p className="mt-1 text-[12px] text-muted">
           Recorded so this decision stays interpretable later: which models did the work, and
-          which policy produced the verdict.
+          which policy version produced the verdict — follow it to the exact settings that
+          were in force, which no later edit can change.
         </p>
       </div>
       <dl className="grid overflow-hidden rounded-card border border-rule bg-surface sm:grid-cols-2">

@@ -94,7 +94,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <main className="mx-auto max-w-5xl px-6 py-10">{children}</main>
         <footer className="mx-auto max-w-5xl px-6 pb-10">
           <p className="border-t border-rule pt-4 text-[11px] text-faint">
-            Security criteria only — acceptable use and compliance are assessed separately.
+            Security criteria only. AI acceptable use and compliance belong to a broader
+            evaluation alongside this one.
           </p>
         </footer>
       </body>

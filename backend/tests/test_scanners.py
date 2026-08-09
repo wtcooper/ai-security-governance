@@ -359,3 +359,42 @@ def test_an_unassessed_scan_yields_no_verdict_rather_than_a_safe_one():
     findings, tools, safe = parse_behavioral({"scan_results": []})
     assert findings == [] and tools == 0
     assert safe is None, "no results means no verdict, not a safe verdict"
+
+
+# --- which files a capped scan keeps -------------------------------------------------------
+
+
+def test_the_file_cap_prioritises_files_that_define_mcp_tools(tmp_path):
+    """Alphabetical truncation systematically dropped the only files that mattered.
+
+    Observed on a real monorepo: 106 source files, the cap kept the first 40 in sorted order —
+    `.agents/`, `.changeset/`, `docs/` — and dropped `packages/mcp/src/index.ts`, the one file
+    defining the tools. The scanner reported "No MCP functions found" on a repository that
+    plainly has them, and the tool blamed the submission for our own selection strategy.
+    """
+    from app.engines.mcp_scanner import _bounded_target, _source_files
+
+    root = tmp_path / "src"
+    # Alphabetically ahead of "packages", and numerous enough to exhaust a small cap.
+    for index in range(10):
+        noise = root / "aaa_docs" / f"page{index}.ts"
+        noise.parent.mkdir(parents=True, exist_ok=True)
+        noise.write_text("export const doc = 1;\n")
+    server = root / "packages" / "mcp" / "src" / "index.ts"
+    server.parent.mkdir(parents=True, exist_ok=True)
+    server.write_text('import { McpServer } from "@modelcontextprotocol/sdk";\nserver.registerTool();\n')
+
+    assert len(_source_files(root)) == 11
+    staged, skipped = _bounded_target(root, cap=3)
+    assert skipped == 8
+    kept = {p.relative_to(staged).as_posix() for p in staged.rglob("*.ts")}
+    assert "packages/mcp/src/index.ts" in kept, f"the server file was dropped: {sorted(kept)}"
+
+
+def test_relevance_ranking_deprioritises_tests():
+    """A scarce file budget should not be spent on test fixtures."""
+    from pathlib import Path
+
+    from app.engines.mcp_scanner import _mcp_relevance
+
+    assert _mcp_relevance(Path("/x/tests/thing.spec.ts")) < _mcp_relevance(Path("/x/src/lib.ts"))

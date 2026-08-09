@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowRight, Info } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import { type AssetType } from "@/lib/api";
 import { ASSET } from "./ui/vocabulary";
 
@@ -51,23 +51,6 @@ export default function Home() {
               </Link>
             );
           })}
-        </div>
-      </section>
-
-      <section className="flex gap-3 rounded-card border border-rule bg-surface px-4 py-3.5">
-        <Info size={15} className="mt-0.5 shrink-0 text-muted" aria-hidden="true" />
-        <div className="space-y-1.5 text-[12.5px] leading-relaxed text-muted">
-          <p>
-            <strong className="font-medium text-ink">This tool assesses security risk only.</strong>{" "}
-            It answers one question: does an asset clear the security thresholds well enough to
-            be auto-approved, or does it need formal deep testing?
-          </p>
-          <p>
-            Acceptable use, harmful content, privacy, licensing and regulatory compliance are
-            deliberately out of scope here — a separate set of concerns, usually owned by a
-            different team. A complete onboarding decision needs those alongside this one; a
-            clean result here is necessary but not sufficient.
-          </p>
         </div>
       </section>
 

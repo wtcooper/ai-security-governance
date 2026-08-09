@@ -255,6 +255,7 @@ async def scan_source(
         return result
 
     scan_target, skipped = _bounded_target(source_path, max_source_files)
+    capped = skipped > 0
     if skipped:
         result.findings.append(
             ScanFinding(
@@ -291,11 +292,20 @@ async def scan_source(
         result.scanner_says_safe = None
         result.raw["behavioral"] = payload
         result.errors.append(
-            "the scanner found no MCP tool definitions to analyse, so this submission is "
-            "UNASSESSED rather than clean. Common causes: the archive contains packaging and "
-            "tests but not the server implementation (check whether its source directory is "
-            "populated, or is a git submodule that a zip download leaves empty), or the tools "
-            "are generated at build time and are not present in source."
+            (
+                "the scanner found no MCP tool definitions among the "
+                f"{max_source_files} of {max_source_files + skipped} source files that were "
+                "analysed, so this submission is UNASSESSED rather than clean. The file cap is "
+                "the likely cause here: submit the specific server directory rather than a "
+                "whole monorepo, or raise the cap."
+                if capped
+                else "the scanner found no MCP tool definitions to analyse, so this submission "
+                "is UNASSESSED rather than clean. Common causes: the archive contains packaging "
+                "and tests but not the server implementation (check whether its source "
+                "directory is populated, or is a git submodule that a zip download leaves "
+                "empty), or the tools are generated at build time and are not present in "
+                "source."
+            )
         )
     else:
         findings, tools, safe = parse_behavioral(payload)
@@ -389,16 +399,65 @@ def _source_files(root: Path) -> list[Path]:
     return files
 
 
+# Markers that a file actually defines MCP tools. Any real server contains at least one, in
+# any SDK: these are the registration surfaces the protocol requires.
+MCP_MARKERS = (
+    "registertool",
+    "listtoolsrequestschema",
+    "calltoolrequestschema",
+    "setrequesthandler",
+    "mcpserver",
+    "modelcontextprotocol",
+    "server.tool(",
+    "@mcp.tool",
+    "fastmcp",
+)
+# Read at most this much of a file when scoring it. Tool registration appears near imports and
+# setup, and reading whole minified bundles to rank them would cost more than the scan.
+_SCORE_READ_BYTES = 64 * 1024
+
+
+def _mcp_relevance(path: Path) -> int:
+    """Rank a file by how likely it is to define MCP tools. Higher sorts first.
+
+    Selection order matters more than it looks. The cap used to keep the first `cap` files in
+    sorted order, which is alphabetical — so on a monorepo it kept `.agents/`, `.changeset/`
+    and `docs/` and dropped `packages/mcp/src/index.ts`. The scanner then reported "No MCP
+    functions found" on a repository that plainly does define tools, and the tool blamed the
+    submission. Ranking by relevance is what makes a capped scan land on the code that matters.
+    """
+    score = 0
+    try:
+        head = path.read_text(errors="ignore")[:_SCORE_READ_BYTES].lower()
+    except OSError:
+        head = ""
+    if any(marker in head for marker in MCP_MARKERS):
+        score += 100
+    name = path.name.lower()
+    if name.startswith(("index.", "server.", "main.", "tools.", "tool.")):
+        score += 10
+    parts = {part.lower() for part in path.parts}
+    if {"mcp", "tools", "server", "src"} & parts:
+        score += 5
+    # Tests and fixtures are the least informative use of a scarce budget.
+    if {"test", "tests", "__tests__", "spec", "fixtures", "examples"} & parts:
+        score -= 20
+    return score
+
+
 def _bounded_target(root: Path, cap: int) -> tuple[Path, int]:
     """Return a directory to scan, plus how many source files were left out.
 
-    Under the cap, the whole tree is scanned. Over it, a staging directory is built holding
-    the first `cap` files (preserving relative layout so the analyzer still sees module
+    Under the cap, the whole tree is scanned. Over it, a staging directory is built holding the
+    `cap` MOST RELEVANT files (preserving relative layout so the analyzer still sees module
     context), and the shortfall is reported by the caller.
     """
     files = _source_files(root)
     if len(files) <= cap:
         return root, 0
+
+    # Rank by relevance, then by path for a stable, reproducible order within a rank.
+    files = sorted(files, key=lambda p: (-_mcp_relevance(p), str(p)))
 
     import shutil
 

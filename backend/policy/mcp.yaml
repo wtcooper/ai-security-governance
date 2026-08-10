@@ -23,12 +23,11 @@ block_on: [critical, high]
 # Honour the scanner's own overall verdict where it has one, rather than re-deriving it.
 trust_scanner_verdict: true
 
-# How many source files the behavioral analyzer examines in one scan. It makes one model call
-# per file, so this trades assessment coverage against wall clock. 200 covers essentially any
-# single server or skill submitted on its own; a monorepo will exceed it and gets a coverage
-# finding whose severity reflects how much went unexamined. Raise it for a thorough review, or
-# submit the individual server directory instead of a whole repository.
-max_source_files: 200
+# How many source files the behavioral analyzer examines in one scan. Set high on purpose: it
+# should never bite by accident, since a 500-file skill is unremarkable. When a submission does
+# exceed it the scan still completes and records a non-blocking WARNING naming the shortfall —
+# a limit informs the submitter, it never decides the outcome. Raise it here to cover more.
+max_source_files: 5000
 
 # Used ONLY to order the results table, and labelled "display only" in the UI. A run's
 # decision never reads this.

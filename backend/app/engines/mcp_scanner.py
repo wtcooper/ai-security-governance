@@ -47,12 +47,14 @@ from app.models import Severity
 # telling us something.
 # Files the behavioral analyzer will examine in one scan, unless the policy says otherwise.
 #
-# Where the number comes from: the analyzer makes one model call per file, so this trades
-# coverage against wall clock. 200 covers essentially any single MCP server submitted on its
-# own; a monorepo will still exceed it and gets a coverage finding whose severity reflects how
-# much was missed. It is NOT set by what happened to be fast enough during development — the
-# previous value of 40 was, and it silently under-scanned every real repository.
-DEFAULT_MAX_SOURCE_FILES = 200
+# Set high on purpose. Earlier values (40, then 200) were guesses that quietly excluded real
+# submissions — a 500-file skill is unremarkable. 5,000 is above anything a single server or
+# skill realistically contains, so the cap should never bite by accident; when it does, that is
+# information for the submitter rather than a verdict about the asset.
+#
+# It stays configurable because the analyzer makes one model call per file, so an enormous
+# monorepo is a genuine cost decision — one for whoever owns the policy, not for this constant.
+DEFAULT_MAX_SOURCE_FILES = 5000
 
 SEVERITY_MAP = {
     "CRITICAL": Severity.CRITICAL,
@@ -270,15 +272,11 @@ async def scan_source(
     if skipped:
         total = max_source_files + skipped
         missed_share = skipped / total
-        # Severity follows how much went unexamined. Missing 60% of a tree is not the same
-        # finding as missing 5%, and reporting both as MEDIUM flattened that away.
-        coverage_severity = (
-            Severity.HIGH
-            if missed_share >= 0.5
-            else Severity.MEDIUM
-            if missed_share >= 0.2
-            else Severity.LOW
-        )
+        # Deliberately never CRITICAL or HIGH. Those are the blocking severities, so escalating
+        # a coverage shortfall into one would turn "we did not look at everything" into "this
+        # asset is dangerous" — failing the submission over our own budget. A limit informs the
+        # submitter; it does not decide the outcome. MEDIUM is visible and non-blocking.
+        coverage_severity = Severity.MEDIUM if missed_share >= 0.2 else Severity.LOW
         result.findings.append(
             ScanFinding(
                 analyzer="coverage",
@@ -289,11 +287,13 @@ async def scan_source(
                     f"({missed_share:.0%} unexamined)"
                 ),
                 detail=(
-                    f"{skipped} source file(s) were not analysed, because the behavioral "
-                    "analyzer runs a model per file and an unbounded sweep of a large "
-                    "repository does not finish. Treat the uncovered portion as unassessed "
-                    "rather than clean. Raise max_source_files, or submit the individual "
-                    "server directory instead of a monorepo."
+                    f"{skipped} of {total} source file(s) were not analysed: this submission is "
+                    f"larger than the {max_source_files}-file coverage setting. Treat the "
+                    "uncovered portion as unassessed rather than clean.\n\n"
+                    "This is a warning, not a failure — the scan completed over the files it "
+                    "did examine. To cover the rest, raise 'Files examined per scan' on the "
+                    "Policies page and re-run, or submit the individual server or skill "
+                    "directory rather than a whole repository."
                 ),
             )
         )

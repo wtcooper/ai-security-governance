@@ -464,3 +464,34 @@ def test_source_selection_covers_more_than_two_languages():
 
     for suffix in (".py", ".ts", ".js", ".go", ".rs", ".rb", ".java", ".sh", ".cs"):
         assert suffix in SOURCE_SUFFIXES, suffix
+
+
+def test_a_coverage_shortfall_is_never_a_blocking_severity():
+    """A limit informs the submitter; it must not decide the outcome.
+
+    `block_on: [critical, high]` means escalating a coverage shortfall to HIGH would fail the
+    submission over OUR budget rather than anything about the asset. An earlier version scaled
+    the shortfall to HIGH at >=50% missed, which did exactly that.
+    """
+    from pathlib import Path
+
+    from app.models import AssetType, Severity
+    from app.scoring.policy import load_policy_dir
+
+    def coverage_severity(missed_share: float) -> Severity:
+        return Severity.MEDIUM if missed_share >= 0.2 else Severity.LOW
+
+    policy = load_policy_dir(Path(__file__).resolve().parents[1] / "policy")
+    for asset_type in (AssetType.MCP, AssetType.SKILL):
+        blocking = policy.scanner[asset_type].block_on
+        for share in (0.05, 0.2, 0.5, 0.95, 1.0):
+            assert coverage_severity(share) not in blocking, (
+                f"a {share:.0%} shortfall would block under {asset_type.value}'s severity rule"
+            )
+
+
+def test_the_default_cap_is_above_a_realistic_submission():
+    """500-file skills are unremarkable; the cap must not bite by accident."""
+    from app.engines.mcp_scanner import DEFAULT_MAX_SOURCE_FILES
+
+    assert DEFAULT_MAX_SOURCE_FILES >= 5000

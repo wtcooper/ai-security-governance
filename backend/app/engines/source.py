@@ -24,7 +24,9 @@ from urllib.parse import urlparse
 
 MAX_ARCHIVE_BYTES = 100 * 1024 * 1024  # 100 MB compressed
 MAX_UNCOMPRESSED_BYTES = 500 * 1024 * 1024  # guards zip bombs
-MAX_MEMBERS = 20_000
+# High enough that a real repository never trips it; this exists to stop an archive
+# with millions of entries exhausting memory during listing, not to police size.
+MAX_MEMBERS = 200_000
 
 ALLOWED_GIT_HOSTS = {
     "github.com",

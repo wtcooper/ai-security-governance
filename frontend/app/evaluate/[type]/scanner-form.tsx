@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { ScanSearch, Upload } from "lucide-react";
-import { createRun, uploadArchive, type AssetType } from "@/lib/api";
+import { createRun, uploadArchive, type AssetType, type UploadResult } from "@/lib/api";
 
 /**
  * Submitting an MCP server or agent skill for scanning.
@@ -28,30 +28,45 @@ export function ScannerForm({
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // What the archive actually contains, reported by the server after upload. Shown before the
+  // scan so the size of a submission — and any coverage shortfall — is known up front rather
+  // than discovered in the results.
+  const [uploaded, setUploaded] = useState<UploadResult | null>(null);
+
+  async function onUpload() {
+    if (!file) {
+      setError("Choose a .zip archive first.");
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    const result = await uploadArchive(file, assetType);
+    setSubmitting(false);
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+    setUploaded(result.upload);
+  }
 
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
+
+    // A zip is uploaded and inspected first, so its size and any coverage shortfall are on
+    // screen before a scan starts rather than discovered afterwards.
+    if (source === "zip" && !uploaded) {
+      await onUpload();
+      return;
+    }
+
     setSubmitting(true);
     setError(null);
 
-    let runIdentifier = identifier.trim();
-    let fallbackName = runIdentifier.replace(/^https:\/\//, "");
-
-    if (source === "zip") {
-      if (!file) {
-        setError("Choose a .zip archive first.");
-        setSubmitting(false);
-        return;
-      }
-      const uploaded = await uploadArchive(file);
-      if (!uploaded.ok) {
-        setError(uploaded.error);
-        setSubmitting(false);
-        return;
-      }
-      runIdentifier = uploaded.identifier;
-      fallbackName = uploaded.filename.replace(/\.zip$/i, "");
-    }
+    const runIdentifier = source === "zip" ? uploaded!.identifier : identifier.trim();
+    const fallbackName =
+      source === "zip"
+        ? uploaded!.filename.replace(/\.zip$/i, "")
+        : identifier.trim().replace(/^https:\/\//, "");
 
     const result = await createRun({
       asset_type: assetType,
@@ -68,6 +83,7 @@ export function ScannerForm({
   }
 
   const ready = source === "url" ? identifier.trim().length > 0 : file !== null;
+  const willScan = source === "url" || uploaded !== null;
 
   return (
     <form onSubmit={onSubmit} className="space-y-5 rounded-card border border-rule bg-surface p-5">
@@ -117,7 +133,11 @@ export function ScannerForm({
           <input
             type="file"
             accept=".zip"
-            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            onChange={(e) => {
+              setFile(e.target.files?.[0] ?? null);
+              setUploaded(null);
+              setError(null);
+            }}
             className="w-full rounded border border-rule bg-surface px-2.5 py-2 text-[13px] file:mr-3 file:rounded file:border-0 file:bg-paper file:px-3 file:py-1 file:text-[12px] file:font-medium"
           />
           <span className="block text-[11px] text-muted">
@@ -125,6 +145,36 @@ export function ScannerForm({
             Extracted with path validation; never executed.
           </span>
         </label>
+      )}
+
+      {uploaded && (
+        <div
+          className={`rounded-card border px-4 py-3 text-[12px] leading-relaxed ${
+            uploaded.exceeds_coverage
+              ? "border-warn/40 bg-warn-wash text-warn"
+              : "border-rule bg-surface text-muted"
+          }`}
+        >
+          <p>
+            <span className="tnum">{uploaded.entry_count.toLocaleString()}</span> files, of which{" "}
+            <span className="tnum">{uploaded.source_file_count.toLocaleString()}</span> are
+            scannable source.
+          </p>
+          {uploaded.exceeds_coverage && (
+            <p className="mt-1.5">
+              <strong className="font-medium">
+                This is more than the {uploaded.max_source_files.toLocaleString()}-file coverage
+                setting.
+              </strong>{" "}
+              The scan will still run and will report exactly what it left out — it will not
+              fail. To cover everything, raise &ldquo;Files examined per scan&rdquo; on the{" "}
+              <a href={`/policies/${assetType}`} className="font-medium underline">
+                {assetType.toUpperCase()} policy page
+              </a>{" "}
+              and re-run, or submit the individual server directory instead.
+            </p>
+          )}
+        </div>
       )}
 
       <label className="block space-y-1.5">
@@ -158,16 +208,20 @@ export function ScannerForm({
         disabled={submitting || !ready}
         className="inline-flex items-center gap-2 rounded bg-ink px-4 py-2 text-[13px] font-medium text-paper transition-opacity hover:opacity-90 disabled:opacity-40"
       >
-        {source === "zip" ? (
-          <Upload size={13} strokeWidth={2.5} aria-hidden="true" />
-        ) : (
+        {willScan ? (
           <ScanSearch size={13} strokeWidth={2.5} aria-hidden="true" />
+        ) : (
+          <Upload size={13} strokeWidth={2.5} aria-hidden="true" />
         )}
         {submitting
-          ? source === "zip"
-            ? "Uploading and scanning…"
-            : "Cloning and scanning…"
-          : "Start scan"}
+          ? willScan
+            ? source === "zip"
+              ? "Starting scan…"
+              : "Cloning and scanning…"
+            : "Uploading and inspecting…"
+          : willScan
+            ? "Start scan"
+            : "Upload and inspect"}
       </button>
     </form>
   );

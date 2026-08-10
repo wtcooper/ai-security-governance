@@ -19,9 +19,11 @@ Every fail-open limit found in this audit has been fixed.
 
 | Limit | Was | Now | Why it mattered |
 |---|---|---|---|
-| MCP behavioral file cap | **40**, hard-coded | **`max_source_files: 200`** in the mcp/skill policy, editable in the UI | Fail-open. On a 106-file monorepo it scanned 40 and reported no findings. The trade-off is real, so it is now governed, versioned and visible rather than a constant. |
+| MCP behavioral file cap | **40**, hard-coded | **`max_source_files: 5000`** in the mcp/skill policy, editable in the UI | Fail-open. On a 106-file monorepo it scanned 40 and reported no findings. 200 was then also a guess — a 500-file skill is unremarkable — so the default is now above anything a single server or skill realistically contains, and the setting is governed rather than constant. |
 | Capped-scan file *selection* | first 40 **alphabetically** | ranked by MCP relevance | Fail-open, and worse than the cap itself: alphabetical order kept `.agents/` and `docs/` and dropped `packages/mcp/src/index.ts`, the only file defining tools. |
-| Coverage-shortfall severity | flat **MEDIUM** | **HIGH ≥50% missed, MEDIUM ≥20%, LOW** below | Missing 62% of a tree was reported at the same severity as missing 5%. |
+| Coverage-shortfall severity | flat **MEDIUM** | **MEDIUM ≥20% missed, otherwise LOW — never CRITICAL or HIGH** | Two problems. It did not distinguish missing 62% from missing 5%; and an intermediate fix that escalated to HIGH was worse, because HIGH is in `block_on`, so exceeding our own budget would have *blocked the submission*. A limit informs the submitter; it never decides the outcome. |
+| `MAX_MEMBERS` | 20,000 entries | **200,000** | Could plausibly reject a legitimate large repository. It exists to stop an archive with millions of entries exhausting memory, not to police size. |
+| Submission size feedback | none until results | **counts reported at upload**, with a warning naming the setting to change | The submitter learns the archive holds e.g. 394 files / 106 scannable *before* a scan, and is told plainly that exceeding the cap warns rather than fails. |
 | `SKIP_DIRS` | included **`tests`** | removed | Fail-open. An entire directory class of submitted code was invisible. Relevance ranking already sorts tests to the back of a capped scan, so excluding them bought nothing. |
 | `SOURCE_SUFFIXES` | **7** (Python + JS/TS only) | **27** (adds Go, Rust, Ruby, Java, C#, C/C++, shell, Lua, Perl, Swift, Kotlin) | Fail-open. An MCP server written in Go had *no* selectable source files. |
 | Findings detail shown | truncated at **400** chars | 1,500 with an explicit pointer to the artifact | Cosmetic but real: threat summaries were cut mid-sentence, hiding the reasoning behind a finding. |
@@ -88,5 +90,11 @@ silently: `test_the_file_cap_comes_from_policy_and_covers_a_normal_submission`,
 `test_coverage_shortfall_severity_scales_with_how_much_was_missed`, and
 `test_the_file_cap_prioritises_files_that_define_mcp_tools`.
 
-The rule going forward: **a limit that reduces what gets assessed belongs in the policy, not in
-the code.** A limit that protects the host belongs in the code, and must fail closed.
+Two rules going forward:
+
+1. **A limit that reduces what gets assessed belongs in the policy, not in the code.** A limit
+   that protects the host belongs in the code, and must fail closed.
+2. **A limit warns; it does not fail.** Exceeding a coverage setting produces a visible,
+   non-blocking finding and a message naming the setting to change — never an error and never a
+   blocking severity. The only things that fail a run are a scan that could not happen at all
+   and evidence that is genuinely absent, because neither of those can support a verdict.

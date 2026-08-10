@@ -113,13 +113,13 @@ export function ResultsTable({ rows }: { rows: EvaluationRow[] }) {
                 aria-pressed={isActive}
                 className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
                   isActive
-                    ? "border-ink bg-ink text-paper"
+                    ? "border-accent bg-accent text-white"
                     : `border-rule ${TONE_TEXT[verdict.tone]} hover:border-ink`
                 }`}
               >
                 <Icon size={11} strokeWidth={2.5} aria-hidden="true" />
                 {label}
-                <span className={isActive ? "text-paper/70" : "text-faint"}>{count}</span>
+                <span className={isActive ? "text-white/70" : "text-faint"}>{count}</span>
               </button>
             );
           })}

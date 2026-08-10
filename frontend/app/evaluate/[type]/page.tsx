@@ -42,7 +42,7 @@ export default async function EvaluatePage({ params }: { params: Promise<{ type:
           <div className="flex items-center gap-2.5">
             <Icon size={20} strokeWidth={1.75} aria-hidden="true" />
             <h1 className="text-[26px] font-semibold leading-tight tracking-tight">
-              New {asset.label.toLowerCase()} evaluation
+              New {asset.sentence} evaluation
             </h1>
           </div>
           <div className="flex gap-2">

@@ -136,7 +136,7 @@ export function SubmitForm({
       <button
         type="submit"
         disabled={submitting}
-        className="inline-flex items-center gap-2 rounded bg-ink px-4 py-2 text-[13px] font-medium text-paper transition-opacity hover:opacity-90 disabled:opacity-40"
+        className="inline-flex items-center gap-2 rounded-md bg-accent px-4 py-2 text-[13px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
       >
         <Play size={13} strokeWidth={2.5} aria-hidden="true" />
         {submitting ? "Preflighting and starting…" : "Start evaluation"}

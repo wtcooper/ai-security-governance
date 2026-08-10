@@ -61,7 +61,7 @@ export function PolicyEditor({
           mode === "view" && (
             <button
               onClick={() => setMode("form")}
-              className="inline-flex items-center gap-1.5 rounded bg-ink px-3 py-1.5 text-[12px] font-medium text-paper transition-opacity hover:opacity-90"
+              className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[12px] font-medium text-white transition-opacity hover:opacity-90"
             >
               <SlidersHorizontal size={12} aria-hidden="true" />
               Edit settings
@@ -167,7 +167,7 @@ function SaveRow({
       <button
         onClick={onSave}
         disabled={saving}
-        className="inline-flex items-center gap-2 rounded bg-ink px-4 py-2 text-[13px] font-medium text-paper transition-opacity hover:opacity-90 disabled:opacity-40"
+        className="inline-flex items-center gap-2 rounded-md bg-accent px-4 py-2 text-[13px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
       >
         <Save size={13} strokeWidth={2.5} aria-hidden="true" />
         {saving ? "Validating and saving…" : `Save as v${nextVersion}`}
@@ -301,25 +301,25 @@ function LlmForm({
                 onClick={() => applyDepth(preset)}
                 aria-pressed={isActive}
                 className={`space-y-1 p-3 text-left transition-colors ${
-                  isActive ? "bg-ink text-paper" : "bg-surface hover:bg-paper"
+                  isActive ? "bg-accent text-white" : "bg-surface hover:bg-paper"
                 }`}
               >
                 <span className="flex items-baseline justify-between gap-2">
                   <span className="text-[13px] font-medium">{preset.label}</span>
-                  <span className={`tnum text-[11px] ${isActive ? "text-paper/70" : "text-faint"}`}>
+                  <span className={`tnum text-[11px] ${isActive ? "text-white/70" : "text-faint"}`}>
                     {preset.samples == null ? "full datasets" : `n=${preset.samples}`}
                   </span>
                 </span>
                 <span className="tnum block text-[12px]">
                   {preset.total_tests.toLocaleString()} tests
-                  <span className={isActive ? "text-paper/70" : "text-faint"}>
+                  <span className={isActive ? "text-white/70" : "text-faint"}>
                     {" "}
                     · ~{preset.total_calls.toLocaleString()} calls
                   </span>
                 </span>
                 <span
                   className={`block text-[11px] leading-relaxed ${
-                    isActive ? "text-paper/80" : "text-muted"
+                    isActive ? "text-white/80" : "text-muted"
                   }`}
                 >
                   {preset.blurb}

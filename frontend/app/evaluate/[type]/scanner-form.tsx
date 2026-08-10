@@ -107,7 +107,7 @@ export function ScannerForm({
               }}
               className={`rounded border px-3 py-1.5 text-[12px] font-medium transition-colors ${
                 source === value
-                  ? "border-ink bg-ink text-paper"
+                  ? "border-accent bg-accent text-white"
                   : "border-rule text-muted hover:border-ink hover:text-ink"
               }`}
             >
@@ -206,7 +206,7 @@ export function ScannerForm({
       <button
         type="submit"
         disabled={submitting || !ready}
-        className="inline-flex items-center gap-2 rounded bg-ink px-4 py-2 text-[13px] font-medium text-paper transition-opacity hover:opacity-90 disabled:opacity-40"
+        className="inline-flex items-center gap-2 rounded-md bg-accent px-4 py-2 text-[13px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
       >
         {willScan ? (
           <ScanSearch size={13} strokeWidth={2.5} aria-hidden="true" />

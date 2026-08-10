@@ -46,22 +46,30 @@ export const TONE_PANEL: Record<Tone, string> = {
   neutral: "border-rule bg-surface",
 };
 
-/** One icon per asset class, chosen to be literal about what the thing is. */
-export const ASSET: Record<AssetType, { icon: LucideIcon; label: string; blurb: string }> = {
+/** One icon per asset class, chosen to be literal about what the thing is. `sentence` is
+ *  the mid-sentence form — acronyms keep their capitals, ordinary words lose them, so a
+ *  blind `toLowerCase()` never produces "ai" or "mcp". */
+export const ASSET: Record<
+  AssetType,
+  { icon: LucideIcon; label: string; sentence: string; blurb: string }
+> = {
   llm: {
     icon: Cpu,
     label: "AI Model",
+    sentence: "AI model",
     blurb:
       "Open-weights or frontier models — submitted as a gateway alias, or a Hugging Face repo for weight scans",
   },
   mcp: {
     icon: Server,
     label: "MCP server",
+    sentence: "MCP server",
     blurb: "A repository URL, or a zip upload for code behind an enterprise boundary",
   },
   skill: {
     icon: Puzzle,
     label: "Agent skill",
+    sentence: "agent skill",
     blurb: "A repository URL, or a zip upload for code behind an enterprise boundary",
   },
 };

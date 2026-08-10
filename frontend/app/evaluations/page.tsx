@@ -68,7 +68,7 @@ export default async function EvaluationsPage({
         </Link>
         <Link
           href={`/evaluate/${active}`}
-          className="inline-flex items-center gap-2 rounded bg-ink px-3.5 py-2 text-[13px] font-medium text-paper transition-opacity hover:opacity-90"
+          className="inline-flex items-center gap-2 rounded-md bg-accent px-3.5 py-2 text-[13px] font-medium text-white transition-opacity hover:opacity-90"
         >
           <Plus size={14} strokeWidth={2.5} aria-hidden="true" />
           New evaluation
@@ -80,11 +80,11 @@ export default async function EvaluationsPage({
       ) : rows.length === 0 ? (
         <div className="rounded-card border border-rule bg-surface px-5 py-10 text-center">
           <p className="text-[13px] text-muted">
-            No {ASSET[active].label.toLowerCase()} evaluations yet.
+            No {ASSET[active].sentence} evaluations yet.
           </p>
           <Link
             href={`/evaluate/${active}`}
-            className="mt-3 inline-flex items-center gap-2 rounded bg-ink px-3.5 py-2 text-[13px] font-medium text-paper transition-opacity hover:opacity-90"
+            className="mt-3 inline-flex items-center gap-2 rounded-md bg-accent px-3.5 py-2 text-[13px] font-medium text-white transition-opacity hover:opacity-90"
           >
             <Plus size={14} strokeWidth={2.5} aria-hidden="true" />
             Run the first one

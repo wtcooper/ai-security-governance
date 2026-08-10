@@ -4,14 +4,25 @@
    governance record is read, quoted, and printed, and one appearance keeps it predictable. */
 
 @theme {
-  /* Cool instrument-panel neutrals — lab paper rather than warm cream. */
-  --color-paper: #fbfbfd;
+  /* Cool platform neutrals. The record itself stays on white; the grey ground keeps
+     white cards legible as discrete panels. */
+  --color-paper: #f4f5f7;
   --color-surface: #ffffff;
-  --color-rule: #e3e6ec;
-  --color-rule-strong: #cfd4dd;
-  --color-ink: #14181f;
-  --color-muted: #5c6672;
-  --color-faint: #8a929c;
+  --color-rule: #e2e5e9;
+  --color-rule-strong: #ccd1d8;
+  --color-ink: #171c23;
+  --color-muted: #59626d;
+  --color-faint: #8d949e;
+
+  /* The command bar. Dark chrome holds the tools; content never sits on it. */
+  --color-carbon: #14171c;
+  --color-carbon-ink: #e8eaee;
+  --color-carbon-muted: #9aa2ad;
+
+  /* The single brand accent. Cobalt marks interactive intent and the gate — the one
+     step where policy actually bites — and appears nowhere else. */
+  --color-accent: #2b4f9e;
+  --color-accent-wash: #eef2fa;
 
   /* Verdict signals. Chosen dark enough to read on white and to stay distinguishable in
      greyscale, because a decision must survive being printed. */
@@ -22,10 +33,15 @@
   --color-block: #a62a21;
   --color-block-wash: #fdf0ef;
 
-  --font-sans: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-plex-mono), ui-monospace, monospace;
+  /* The verdict colours above are tuned for white. The gateway light lives on the carbon
+     bar, so it gets brighter variants that clear the dark ground. */
+  --color-pass-bright: #6fd0a8;
+  --color-block-bright: #f2857c;
 
-  --radius-card: 4px;
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, monospace;
+
+  --radius-card: 10px;
 }
 
 html {
@@ -36,8 +52,9 @@ body {
   background-color: var(--color-paper);
   color: var(--color-ink);
   font-family: var(--font-sans);
-  /* Slightly tightened default: this UI is mostly labels and measurements, not prose. */
-  font-feature-settings: "cv05", "ss03";
+  /* Disambiguation first: this UI is mostly identifiers and measurements, so Inter's
+     alternates for I/l and a slashed zero are worth more than its display defaults. */
+  font-feature-settings: "cv05", "cv08", "zero";
   -webkit-font-smoothing: antialiased;
 }
 
@@ -91,9 +108,10 @@ body {
   opacity: 1;
 }
 
-/* Keyboard focus stays visible and uses ink rather than the browser default blue. */
+/* Keyboard focus stays visible and uses the accent, so focus and interactivity share
+   one colour. */
 :where(a, button, select, input, [tabindex]):focus-visible {
-  outline: 2px solid var(--color-ink);
+  outline: 2px solid var(--color-accent);
   outline-offset: 2px;
   border-radius: 2px;
 }

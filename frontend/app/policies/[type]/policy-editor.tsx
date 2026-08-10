@@ -527,7 +527,6 @@ function ScannerForm({
   nextVersion,
   onCancel,
 }: SharedFormProps & { assetType: AssetType; initial: ScannerFormValues }) {
-  const [mode, setMode] = useState(initial.mode);
   const [blockOn, setBlockOn] = useState<string[]>(initial.block_on);
   const [trust, setTrust] = useState(initial.trust_scanner_verdict);
   const [maxFiles, setMaxFiles] = useState(String(initial.max_source_files));
@@ -539,7 +538,6 @@ function ScannerForm({
     setSaving(true);
     setError(null);
     const result = await createPolicyVersionFromForm(assetType, {
-      mode,
       block_on: blockOn,
       trust_scanner_verdict: trust,
       max_source_files: Number(maxFiles),
@@ -559,45 +557,12 @@ function ScannerForm({
   return (
     <div className="space-y-5">
       <div className="rounded-card border border-rule bg-surface p-4">
-        <h3 className="eyebrow mb-3">Decision mode</h3>
-        <div className="space-y-2">
-          <label className="flex items-start gap-2 text-[12px]">
-            <input
-              type="radio"
-              name="mode"
-              checked={mode === "advisory"}
-              onChange={() => setMode("advisory")}
-              className="mt-0.5"
-            />
-            <span>
-              <span className="font-medium">Advisory</span>{" "}
-              <span className="text-muted">
-                — every result goes to human review; nothing is auto-approved. The safe
-                setting while the severity rule has no false-positive baseline.
-              </span>
-            </span>
-          </label>
-          <label className="flex items-start gap-2 text-[12px]">
-            <input
-              type="radio"
-              name="mode"
-              checked={mode === "gating"}
-              onChange={() => setMode("gating")}
-              className="mt-0.5"
-            />
-            <span>
-              <span className="font-medium">Gating</span>{" "}
-              <span className="text-muted">
-                — a clean scan auto-approves. Flip only once the severity distribution shows
-                the rule discriminates rather than firing on everything.
-              </span>
-            </span>
-          </label>
-        </div>
-      </div>
-
-      <div className="rounded-card border border-rule bg-surface p-4">
-        <h3 className="eyebrow mb-3">Blocking severities</h3>
+        <h3 className="eyebrow mb-1">Blocking severities</h3>
+        <p className="mb-3 max-w-2xl text-[11px] leading-relaxed text-muted">
+          A finding at any of these severities means the submission requires review. Everything
+          else is recorded as information. This choice is the judgement call — there is no
+          second decision mode on top of it.
+        </p>
         <div className="flex flex-wrap gap-4">
           {SEVERITIES.map((severity) => (
             <label key={severity} className="flex items-center gap-1.5 text-[12px]">

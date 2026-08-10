@@ -50,7 +50,7 @@ def _all_passing(policy) -> list[Score]:
 
 def test_all_gates_satisfied_approves(policy):
     result = gates.decide_llm(policy, _all_passing(policy))
-    assert result.decision is Decision.AUTO_APPROVE
+    assert result.decision is Decision.PASS
     assert len(result.gate_outcomes) == len(policy.llm_gates)
 
 
@@ -62,7 +62,7 @@ def test_one_breached_gate_blocks(policy):
     scores.append(_score(gate.check_id, gate.threshold - 0.5, policy))
 
     result = gates.decide_llm(policy, scores)
-    assert result.decision is Decision.NEEDS_DEEP_TESTING
+    assert result.decision is Decision.REQUIRES_REVIEW
     assert any("cyse4_multilingual_prompt_injection" in r for r in result.blocking_reasons)
 
 
@@ -70,13 +70,13 @@ def test_missing_score_never_approves(policy):
     """Absence of evidence is not evidence of safety."""
     scores = _all_passing(policy)[:-1]
     result = gates.decide_llm(policy, scores)
-    assert result.decision is Decision.NEEDS_DEEP_TESTING
+    assert result.decision is Decision.REQUIRES_REVIEW
     assert any("missing score" in r for r in result.blocking_reasons)
 
 
 def test_no_scores_at_all_never_approves(policy):
     result = gates.decide_llm(policy, [])
-    assert result.decision is Decision.NEEDS_DEEP_TESTING
+    assert result.decision is Decision.REQUIRES_REVIEW
 
 
 def test_ungated_metrics_are_never_thresholded(policy):
@@ -87,7 +87,7 @@ def test_ungated_metrics_are_never_thresholded(policy):
     scores.append(_score("agentdojo::utility_accuracy", 0.0, policy, gated=False))
 
     result = gates.decide_llm(policy, scores)
-    assert result.decision is Decision.AUTO_APPROVE
+    assert result.decision is Decision.PASS
 
 
 def test_composite_is_never_a_gate(policy):
@@ -96,7 +96,7 @@ def test_composite_is_never_a_gate(policy):
     normalized = {s.check_id: 0.0 for s in scores}  # composite would be 0
     assert normalize.composite_score(normalized, policy.composite_weights) == 0.0
     # The decision is unchanged, because gates.py never reads the composite.
-    assert gates.decide_llm(policy, scores).decision is Decision.AUTO_APPROVE
+    assert gates.decide_llm(policy, scores).decision is Decision.PASS
 
 
 def test_unreliable_judge_errors_and_emits_no_decision(policy):
@@ -130,7 +130,7 @@ def test_judge_refusal_at_or_below_limit_is_fine(policy):
     result = gates.decide_llm(
         policy, _all_passing(policy), judge_refusal_rate=policy.judge_max_refusal_rate
     )
-    assert result.decision is Decision.AUTO_APPROVE
+    assert result.decision is Decision.PASS
 
 
 def test_direction_is_respected_in_both_senses(policy):
@@ -148,43 +148,54 @@ def test_direction_is_respected_in_both_senses(policy):
 # --- scanner-backed asset classes -------------------------------------------------------
 
 
-def test_advisory_mode_never_approves_even_on_a_clean_scan(policy):
+def test_a_clean_scan_passes(policy):
+    """One rule: no blocking-severity findings and a safe scanner verdict is a pass.
+
+    This replaces the advisory/gating distinction. Human judgement is spent choosing which
+    severities belong in `block_on`, not on a second mode that could withhold approval from a
+    result that met the rule.
+    """
     from app.models import AssetType
 
     for asset_type in (AssetType.MCP, AssetType.SKILL):
         result = gates.decide_scanner(policy, asset_type, {}, scanner_says_safe=True)
-        assert result.decision is Decision.NEEDS_DEEP_TESTING, asset_type
-        assert "advisory_mode" in result.blocking_reasons
+        assert result.decision is Decision.PASS, asset_type
+        assert not result.blocking_reasons
 
 
-def test_blocking_severity_blocks(policy):
+def test_a_blocking_severity_requires_review(policy):
     from app.models import AssetType
 
     result = gates.decide_scanner(
         policy, AssetType.MCP, {Severity.CRITICAL: 1}, scanner_says_safe=True
     )
-    assert result.decision is Decision.NEEDS_DEEP_TESTING
+    assert result.decision is Decision.REQUIRES_REVIEW
     assert any("critical" in r for r in result.blocking_reasons)
 
 
-def test_failed_scan_is_an_error_not_an_approval(policy):
+def test_a_non_blocking_severity_does_not_require_review(policy):
+    """Only severities named in `block_on` decide. A MEDIUM finding is information."""
+    from app.models import AssetType
+
+    result = gates.decide_scanner(
+        policy, AssetType.MCP, {Severity.MEDIUM: 3, Severity.LOW: 9}, scanner_says_safe=True
+    )
+    assert result.decision is Decision.PASS
+
+
+def test_an_unsafe_scanner_verdict_requires_review_even_with_no_blocking_counts(policy):
+    from app.models import AssetType
+
+    result = gates.decide_scanner(policy, AssetType.MCP, {}, scanner_says_safe=False)
+    assert result.decision is Decision.REQUIRES_REVIEW
+    assert any("verdict" in r for r in result.blocking_reasons)
+
+
+def test_failed_scan_is_an_error_not_a_pass(policy):
     from app.models import AssetType
 
     result = gates.decide_scanner(policy, AssetType.SKILL, {}, scan_failed=True)
     assert result.decision is Decision.ERROR
-
-
-def test_gating_mode_can_approve_a_clean_scan(policy):
-    """Proves advisory is the only thing withholding approval, not a hidden second rule."""
-    from dataclasses import replace
-
-    from app.models import AssetType
-
-    gating = replace(policy.scanner[AssetType.MCP], mode="gating")
-    patched = replace(policy, scanner={**policy.scanner, AssetType.MCP: gating})
-
-    result = gates.decide_scanner(patched, AssetType.MCP, {}, scanner_says_safe=True)
-    assert result.decision is Decision.AUTO_APPROVE
 
 
 # --- open-weight supply chain ------------------------------------------------------------
@@ -192,18 +203,18 @@ def test_gating_mode_can_approve_a_clean_scan(policy):
 
 def test_unsafe_weight_file_blocks(policy):
     result = gates.decide_weights(policy, ["pytorch_model.bin"], scans_done=True)
-    assert result.decision is Decision.NEEDS_DEEP_TESTING
+    assert result.decision is Decision.REQUIRES_REVIEW
 
 
 def test_unscanned_is_not_treated_as_safe(policy):
     result = gates.decide_weights(policy, [], scans_done=False)
-    assert result.decision is Decision.NEEDS_DEEP_TESTING
+    assert result.decision is Decision.REQUIRES_REVIEW
     assert "scans_incomplete" in result.blocking_reasons
 
 
 def test_clean_completed_scan_approves(policy):
     result = gates.decide_weights(policy, [], scans_done=True)
-    assert result.decision is Decision.AUTO_APPROVE
+    assert result.decision is Decision.PASS
 
 
 # --- normalization ----------------------------------------------------------------------

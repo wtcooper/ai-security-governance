@@ -163,31 +163,30 @@ def test_disabling_every_gate_is_refused_by_validation():
         validate_class_content(AssetType.LLM, edited)
 
 
-def test_scanner_form_flips_mode_and_keeps_comments():
+def test_scanner_form_edits_the_severity_rule_and_keeps_comments():
     text = (POLICY_DIR / "mcp.yaml").read_text()
     form = ScannerPolicyForm(
-        mode="gating",
         block_on=["critical", "high", "medium"],
         trust_scanner_verdict=True,
+        max_source_files=5000,
         severity_rollup_penalty={"critical": 40, "high": 20, "medium": 8, "low": 2, "info": 0},
     )
     edited = apply_scanner_form(text, form)
     data = validate_class_content(AssetType.MCP, edited)
-    assert data["mode"] == "gating"
     assert data["block_on"] == ["critical", "high", "medium"]
     assert "# NOTE: mcp-scanner has no CRITICAL severity" in edited
 
 
-def test_scanner_form_with_invalid_mode_fails_validation():
+def test_scanner_form_with_an_unknown_severity_fails_validation():
     text = (POLICY_DIR / "skill.yaml").read_text()
     form = ScannerPolicyForm(
-        mode="sometimes",
-        block_on=["high"],
+        block_on=["catastrophic"],
         trust_scanner_verdict=True,
+        max_source_files=5000,
         severity_rollup_penalty={"critical": 40, "high": 20, "medium": 8, "low": 2, "info": 0},
     )
     edited = apply_scanner_form(text, form)
-    with pytest.raises(Exception, match="mode must be"):
+    with pytest.raises(Exception, match="block_on must be"):
         validate_class_content(AssetType.SKILL, edited)
 
 
@@ -203,8 +202,8 @@ def test_current_form_values_round_trip():
     assert set(values["gates"]) == {c.id for c in LLM_CHECKS}
 
     scanner = current_form_values(AssetType.MCP, (POLICY_DIR / "mcp.yaml").read_text())
-    assert scanner["mode"] == "advisory"
     assert scanner["block_on"] == ["critical", "high"]
+    assert scanner["max_source_files"] == 5000
     assert scanner["severity_rollup_penalty"]["critical"] == 40
 
 

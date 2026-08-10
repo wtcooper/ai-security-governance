@@ -6,9 +6,6 @@
 # After first startup the governing copy lives in the DATABASE, versioned and immutable —
 # edit it from the Policies page. This file only seeds an empty database.
 
-# advisory -> every result goes to human review; nothing is ever auto-approved.
-mode: advisory
-
 # skill-scanner DOES emit CRITICAL, so both entries here are live.
 block_on: [critical, high]
 

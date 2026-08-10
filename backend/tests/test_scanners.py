@@ -146,7 +146,7 @@ def test_a_high_mcp_finding_blocks(policy):
     findings, _, safe = parse_behavioral(MCP_BEHAVIORAL)
     counts = {f.severity: 1 for f in findings}
     outcome = gates.decide_scanner(policy, AssetType.MCP, counts, scanner_says_safe=safe)
-    assert outcome.decision is Decision.NEEDS_DEEP_TESTING
+    assert outcome.decision is Decision.REQUIRES_REVIEW
     assert any("high" in reason for reason in outcome.blocking_reasons)
 
 
@@ -238,7 +238,7 @@ def test_skill_scanner_verdict_is_honoured_not_rederived(policy):
     information rather than add any.
     """
     outcome = gates.decide_scanner(policy, AssetType.SKILL, {}, scanner_says_safe=False)
-    assert outcome.decision is Decision.NEEDS_DEEP_TESTING
+    assert outcome.decision is Decision.REQUIRES_REVIEW
     assert any("scanner verdict" in reason for reason in outcome.blocking_reasons)
 
 

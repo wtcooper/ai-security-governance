@@ -8,12 +8,6 @@
 # After first startup the governing copy lives in the DATABASE, versioned and immutable —
 # edit it from the Policies page. This file only seeds an empty database.
 
-# advisory -> every result goes to human review; nothing is ever auto-approved.
-# We ship advisory because there is no false-positive baseline yet, so an untuned severity
-# rule cannot be trusted to approve anything. Flip to `gating` once /api/stats/severity
-# shows the distribution is workable. That flip is the only change required.
-mode: advisory
-
 # NOTE: mcp-scanner has no CRITICAL severity. Its scale is HIGH / MEDIUM / LOW / UNKNOWN /
 # SAFE, so `critical` below never matches and HIGH is what actually blocks. It is listed
 # anyway so the two scanner classes read consistently and so a future scanner version that

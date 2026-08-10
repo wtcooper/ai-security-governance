@@ -140,9 +140,8 @@ export function PolicySettings({
   const scanner = values as ScannerFormValues;
   return (
     <div className="space-y-5">
-      <dl className="grid overflow-hidden rounded-card border border-rule bg-surface sm:grid-cols-4">
+      <dl className="grid overflow-hidden rounded-card border border-rule bg-surface sm:grid-cols-3">
         {[
-          ["Decision mode", scanner.mode],
           ["Blocks on", scanner.block_on.join(", ")],
           ["Trusts scanner verdict", scanner.trust_scanner_verdict ? "yes" : "no"],
           ["Files examined per scan", String(scanner.max_source_files)],
@@ -150,7 +149,7 @@ export function PolicySettings({
           <div
             key={label}
             className={`border-b border-rule px-4 py-3 last:border-b-0 sm:border-b-0 ${
-              index < 3 ? "sm:border-r" : ""
+              index < 2 ? "sm:border-r" : ""
             }`}
           >
             <dt className="eyebrow">{label}</dt>

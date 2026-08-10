@@ -58,9 +58,9 @@ def read_policy(settings: SettingsDep, session: SessionDep) -> dict[str, Any]:
         "composite_is_display_only": True,
         "scanner": {
             asset_type.value: {
-                "mode": sp.mode,
                 "block_on": sorted(s.value for s in sp.block_on),
                 "trust_scanner_verdict": sp.trust_scanner_verdict,
+                "max_source_files": sp.max_source_files,
             }
             for asset_type, sp in policy.scanner.items()
         },

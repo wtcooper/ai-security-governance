@@ -24,11 +24,13 @@ from app.routers import (
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    from app.jobs import close_orphaned_runs
+    from app.jobs import close_orphaned_runs, migrate_decision_vocabulary
     from app.scoring.policy import seed_policies
 
     init_db()
     with session_scope() as session:
+        # Runs first: a historical decision must stay readable before anything queries it.
+        migrate_decision_vocabulary(session)
         seed_policies(session, get_settings().policy_dir)
         close_orphaned_runs(session)
     yield

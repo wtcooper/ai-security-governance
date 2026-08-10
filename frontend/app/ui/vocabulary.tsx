@@ -69,8 +69,8 @@ export const ASSET: Record<AssetType, { icon: LucideIcon; label: string; blurb: 
 /** Decision states. The label always travels with the icon, so colour is never the only
  *  carrier of meaning (criterion 7.5). */
 export const DECISION: Record<string, Verdict> = {
-  auto_approve: { icon: ShieldCheck, label: "Auto-approve", tone: "pass" },
-  needs_deep_testing: { icon: ShieldAlert, label: "Needs deep testing", tone: "warn" },
+  pass: { icon: ShieldCheck, label: "Pass", tone: "pass" },
+  requires_review: { icon: ShieldAlert, label: "Requires review", tone: "warn" },
   error: { icon: ShieldX, label: "No decision", tone: "block" },
 };
 

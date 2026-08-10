@@ -112,7 +112,10 @@ def test_versions_are_per_class(session):
     seed_policies(session, POLICY_DIR)
     mcp = policy_store.newest_version(session, AssetType.MCP)
     policy_store.create_version(
-        session, AssetType.MCP, mcp.content.replace("mode: advisory", "mode: gating"), None
+        session,
+        AssetType.MCP,
+        mcp.content.replace("block_on: [critical, high]", "block_on: [critical]"),
+        None,
     )
     assert policy_store.newest_version(session, AssetType.MCP).version == 2
     assert policy_store.newest_version(session, AssetType.LLM).version == 1
@@ -155,12 +158,25 @@ def test_invalid_llm_content_is_rejected_and_creates_no_version(session, mutatio
     assert policy_store.newest_version(session, AssetType.LLM).version == 1
 
 
-def test_invalid_scanner_mode_is_rejected(session):
+def test_an_unknown_severity_in_block_on_is_rejected(session):
     seed_policies(session, POLICY_DIR)
     content = policy_store.newest_version(session, AssetType.MCP).content
-    with pytest.raises(PolicyValidationError, match="mode must be"):
+    with pytest.raises(PolicyValidationError, match="block_on must be"):
         policy_store.create_version(
-            session, AssetType.MCP, content.replace("mode: advisory", "mode: sometimes"), None
+            session,
+            AssetType.MCP,
+            content.replace("block_on: [critical, high]", "block_on: [catastrophic]"),
+            None,
+        )
+
+
+def test_an_empty_block_on_is_rejected(session):
+    """A severity rule that blocks on nothing would approve every scan silently."""
+    seed_policies(session, POLICY_DIR)
+    content = policy_store.newest_version(session, AssetType.MCP).content
+    with pytest.raises(PolicyValidationError, match="block_on must be"):
+        policy_store.create_version(
+            session, AssetType.MCP, content.replace("block_on: [critical, high]", "block_on: []"), None
         )
 
 
@@ -314,3 +330,32 @@ def test_an_unresolvable_policy_falls_back_to_active(session):
 
     resolved = policy_for_run(session, run, asset)
     assert resolved.llm_gates, "must fall back rather than raise"
+
+
+def test_a_stored_version_with_a_retired_key_still_loads(session):
+    """Immutable versioning is worthless if a historical document stops loading.
+
+    `mode` was the advisory/gating switch, now retired. Versions saved before its removal still
+    contain it, and a run recorded against one of those versions must still resolve — otherwise
+    every historical decision becomes unreadable the moment a key is retired.
+    """
+    from app.scoring.policy import build_policy
+
+    seed_policies(session, POLICY_DIR)
+    docs = {}
+    for asset_type in AssetType:
+        content = policy_store.newest_version(session, asset_type).content
+        if asset_type is not AssetType.LLM:
+            content = "mode: advisory\n" + content  # as an older version would have had it
+        docs[asset_type] = (content, "1")
+
+    policy = build_policy(docs)  # must not raise
+    assert policy.scanner[AssetType.MCP].block_on
+
+
+def test_a_retired_key_is_still_rejected_when_saving(session):
+    """Reading history leniently must not let the retired concept back in."""
+    seed_policies(session, POLICY_DIR)
+    content = "mode: advisory\n" + policy_store.newest_version(session, AssetType.MCP).content
+    with pytest.raises(PolicyValidationError, match="unknown key"):
+        policy_store.create_version(session, AssetType.MCP, content, None)

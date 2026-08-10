@@ -9,7 +9,10 @@ Invariants, each covered by a test:
 * **The composite is never read.** It exists for display ordering only.
 * **Absence is never approval.** A missing required check, an unreliable judge, or a scanner
   error withholds approval rather than defaulting to it.
-* **Advisory mode cannot approve.** It can only ever return NEEDS_DEEP_TESTING.
+
+There is exactly one rule: a measurement clears the threshold its policy sets, or it does not.
+Human judgement is spent on setting the thresholds, not on a second decision mode layered over
+the result.
 """
 
 from __future__ import annotations
@@ -49,7 +52,7 @@ class DecisionResult:
 
     @property
     def approved(self) -> bool:
-        return self.decision is Decision.AUTO_APPROVE
+        return self.decision is Decision.PASS
 
 
 def decide_llm(
@@ -133,14 +136,14 @@ def decide_llm(
 
     if blocking:
         return DecisionResult(
-            decision=Decision.NEEDS_DEEP_TESTING,
+            decision=Decision.REQUIRES_REVIEW,
             reason=f"{len(blocking)} gate(s) not satisfied: " + "; ".join(blocking),
             gate_outcomes=outcomes,
             blocking_reasons=blocking,
         )
 
     return DecisionResult(
-        decision=Decision.AUTO_APPROVE,
+        decision=Decision.PASS,
         reason=f"All {len(outcomes)} benchmark gates satisfied.",
         gate_outcomes=outcomes,
     )
@@ -154,7 +157,7 @@ def decide_weights(policy: Policy, unsafe_files: list[str], scans_done: bool) ->
     """
     if unsafe_files and policy.weights_block_on_unsafe_file:
         return DecisionResult(
-            decision=Decision.NEEDS_DEEP_TESTING,
+            decision=Decision.REQUIRES_REVIEW,
             reason=(
                 f"{len(unsafe_files)} weight file(s) flagged unsafe by upstream scanners: "
                 + ", ".join(unsafe_files[:5])
@@ -163,7 +166,7 @@ def decide_weights(policy: Policy, unsafe_files: list[str], scans_done: bool) ->
         )
     if not scans_done and not policy.weights_treat_unscanned_as_pass:
         return DecisionResult(
-            decision=Decision.NEEDS_DEEP_TESTING,
+            decision=Decision.REQUIRES_REVIEW,
             reason=(
                 "Upstream scans are incomplete for this repository. Unscanned is not the "
                 "same as safe, so this needs a local scan or manual review."
@@ -171,7 +174,7 @@ def decide_weights(policy: Policy, unsafe_files: list[str], scans_done: bool) ->
             blocking_reasons=["scans_incomplete"],
         )
     return DecisionResult(
-        decision=Decision.AUTO_APPROVE,
+        decision=Decision.PASS,
         reason="All scanned weight files reported safe by upstream scanners.",
     )
 
@@ -214,25 +217,12 @@ def decide_scanner(
 
     if blocking:
         return DecisionResult(
-            decision=Decision.NEEDS_DEEP_TESTING,
+            decision=Decision.REQUIRES_REVIEW,
             reason="Blocking findings: " + "; ".join(blocking),
             blocking_reasons=blocking,
         )
 
-    # Clean scan, but advisory mode still withholds approval: without a false-positive
-    # baseline we cannot yet claim a clean scan means safe.
-    if scanner_policy.is_advisory:
-        return DecisionResult(
-            decision=Decision.NEEDS_DEEP_TESTING,
-            reason=(
-                "No blocking findings, but this asset class is in advisory mode: the severity "
-                "rule has no false-positive baseline yet, so every result goes to human "
-                "review. Set mode: gating in policy.yaml once the distribution is understood."
-            ),
-            blocking_reasons=["advisory_mode"],
-        )
-
     return DecisionResult(
-        decision=Decision.AUTO_APPROVE,
+        decision=Decision.PASS,
         reason="No findings at or above the blocking severity, and the scanner reported safe.",
     )

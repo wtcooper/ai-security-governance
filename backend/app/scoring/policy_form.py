@@ -48,12 +48,11 @@ class LlmPolicyForm(BaseModel):
 
 
 class ScannerPolicyForm(BaseModel):
-    mode: str
     block_on: list[str]
     trust_scanner_verdict: bool
     severity_rollup_penalty: dict[str, int]
     # Assessment coverage per scan. Editable because it is a trade-off, not a constant.
-    max_source_files: int = Field(default=200, ge=1)
+    max_source_files: int = Field(default=5000, ge=1)
 
 
 def _round_trip() -> YAML:
@@ -131,7 +130,6 @@ def apply_scanner_form(current_text: str, form: ScannerPolicyForm) -> str:
     yaml = _round_trip()
     data = yaml.load(current_text)
 
-    data["mode"] = form.mode
     data["block_on"] = list(form.block_on)
     data["trust_scanner_verdict"] = form.trust_scanner_verdict
     data["max_source_files"] = form.max_source_files
@@ -217,9 +215,8 @@ def current_form_values(asset_type: AssetType, content: str) -> dict:
             ),
         }
     return {
-        "mode": data.get("mode", "advisory"),
         "block_on": list(data.get("block_on") or []),
         "trust_scanner_verdict": bool(data.get("trust_scanner_verdict", True)),
-        "max_source_files": int(data.get("max_source_files", 200)),
+        "max_source_files": int(data.get("max_source_files", 5000)),
         "severity_rollup_penalty": dict(data.get("severity_rollup_penalty") or {}),
     }

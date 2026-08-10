@@ -174,9 +174,9 @@ export default async function EvaluatePage({ params }: { params: Promise<{ type:
             {scanner && (
               <dl className="grid overflow-hidden rounded-card border border-rule bg-surface sm:grid-cols-3">
                 {[
-                  ["Mode", scanner.mode],
                   ["Blocks on", scanner.block_on.join(", ")],
                   ["Trusts scanner verdict", String(scanner.trust_scanner_verdict)],
+                  ["Files examined per scan", String(scanner.max_source_files)],
                 ].map(([label, value], index) => (
                   <div
                     key={label}
@@ -191,17 +191,6 @@ export default async function EvaluatePage({ params }: { params: Promise<{ type:
               </dl>
             )}
 
-            {scanner?.mode === "advisory" && (
-              <p className="flex gap-2 rounded-card border border-warn/30 bg-warn-wash px-4 py-3 text-[12px] leading-relaxed text-warn">
-                <Info size={14} className="mt-px shrink-0" aria-hidden="true" />
-                <span>
-                  <strong className="font-medium">Advisory mode.</strong> Every result goes to
-                  human review and nothing is auto-approved, because the severity rule has no
-                  false-positive baseline yet. Set <code className="tnum">mode: gating</code> in
-                  policy.yaml once the distribution is understood.
-                </span>
-              </p>
-            )}
           </section>
         </>
       )}

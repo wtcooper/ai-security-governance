@@ -146,13 +146,13 @@ def test_unsafe_file_blocks_the_gate(policy):
     )
     assert result.unsafe_files == ["pytorch_model.bin"]
     outcome = gates.decide_weights(policy, result.unsafe_files, result.scans_done)
-    assert outcome.decision is Decision.NEEDS_DEEP_TESTING
+    assert outcome.decision is Decision.REQUIRES_REVIEW
 
 
 def test_incomplete_scans_block_rather_than_pass(policy):
     """Criterion 2.2 — the property that stops a poisoned-but-unscanned repo sailing through."""
     outcome = gates.decide_weights(policy, [], scans_done=False)
-    assert outcome.decision is Decision.NEEDS_DEEP_TESTING
+    assert outcome.decision is Decision.REQUIRES_REVIEW
     assert "scans_incomplete" in outcome.blocking_reasons
 
 

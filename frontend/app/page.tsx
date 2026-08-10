@@ -17,9 +17,9 @@ export default function Home() {
           Evaluate an AI asset
         </h1>
         <p className="text-[13.5px] leading-relaxed text-muted">
-          Determines whether an asset clears our security thresholds and can be auto-approved,
-          or whether it needs formal deep testing. Every result is measured against a written,
-          versioned policy and records which models and which policy produced it.
+          Determines whether an asset clears the security thresholds set in policy, or whether
+          it requires review. Every result is measured against a written, versioned policy and
+          records which models and which policy produced it.
         </p>
       </section>
 
@@ -72,7 +72,7 @@ export default function Home() {
             ],
             [
               "Decide",
-              "Auto-approve only when every gate passes. Anything less goes to human deep testing — never silently through.",
+              "Passes only when every measurement clears its threshold. Anything short requires review — never silently through.",
             ],
           ].map(([title, body], index) => (
             <li key={title} className="space-y-1.5 bg-surface p-5">

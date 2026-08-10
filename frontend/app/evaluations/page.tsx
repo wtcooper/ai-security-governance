@@ -1,6 +1,6 @@
 import Link from "next/link";
-import { BookOpen, Info, Plus } from "lucide-react";
-import { fetchEvaluations, fetchPolicy, type AssetType } from "@/lib/api";
+import { BookOpen, Plus } from "lucide-react";
+import { fetchEvaluations, type AssetType } from "@/lib/api";
 import { ASSET } from "../ui/vocabulary";
 import { ResultsTable } from "./results-table";
 
@@ -24,8 +24,7 @@ export default async function EvaluationsPage({
   const active: AssetType =
     type === "mcp" || type === "skill" || type === "llm" ? (type as AssetType) : "llm";
 
-  const [rows, policy] = await Promise.all([fetchEvaluations(active), fetchPolicy()]);
-  const scanner = policy?.scanner?.[active];
+  const rows = await fetchEvaluations(active);
 
   return (
     <div className="space-y-6">
@@ -75,18 +74,6 @@ export default async function EvaluationsPage({
           New evaluation
         </Link>
       </div>
-
-      {active !== "llm" && scanner?.mode === "advisory" && (
-        <p className="flex gap-2 rounded-card border border-rule bg-surface px-4 py-3 text-[12px] leading-relaxed text-muted">
-          <Info size={14} className="mt-px shrink-0 text-warn" aria-hidden="true" />
-          <span>
-            Gated on a severity rule rather than a score, and running in{" "}
-            <strong className="font-medium text-ink">advisory mode</strong>: nothing here is
-            auto-approved, because the rule has no false-positive baseline yet. The score
-            column is a severity roll-up for ordering only.
-          </span>
-        </p>
-      )}
 
       {rows === null ? (
         <p className="text-[13px] text-block">Could not reach the backend.</p>

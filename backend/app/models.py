@@ -42,8 +42,14 @@ class RunStatus(StrEnum):
 
 
 class Decision(StrEnum):
-    AUTO_APPROVE = "auto_approve"
-    NEEDS_DEEP_TESTING = "needs_deep_testing"
+    """One rule, two outcomes, plus the case where there is nothing to decide from.
+
+    A measurement either clears the threshold its policy sets, or it does not. Human judgement
+    lives in setting those thresholds, not in a second decision mode layered on top of them.
+    """
+
+    PASS = "pass"
+    REQUIRES_REVIEW = "requires_review"
     ERROR = "error"
 
 

@@ -60,7 +60,7 @@ export default async function CriteriaPage({ params }: { params: Promise<{ type:
           </h1>
           <p className="mt-1.5 max-w-3xl text-[13.5px] leading-relaxed text-muted">
             {assetType === "llm"
-              ? "Each benchmark produces one measurement, compared against one written threshold. Every threshold has to be satisfied for an asset to be auto-approved — anything short routes to human deep testing rather than being waved through."
+              ? "Each benchmark produces one measurement, compared against one written threshold. Every threshold has to be satisfied for the asset to pass; anything short requires review. Human judgement is spent setting those thresholds, not on a second decision applied afterwards."
               : "There is no benchmark that scores a specific submitted artifact, so the scanner is the evaluation and the gate is a severity rule rather than a score. Scanner findings have no fixed denominator, which is why a 0–100 threshold over them would be invented precision."}
           </p>
         </div>
@@ -138,7 +138,7 @@ function Steps({ assetType }: { assetType: AssetType }) {
           ],
           [
             "Decide",
-            "Auto-approve only when every gate passes and the judge graded reliably. Anything else routes to human deep testing.",
+            "Passes only when every measurement clears its threshold and the judge graded reliably. Anything else requires review.",
           ],
         ]
       : [
@@ -156,7 +156,7 @@ function Steps({ assetType }: { assetType: AssetType }) {
           ],
           [
             "Decide",
-            "In advisory mode every result goes to human review. A scan that failed is an error, never a pass.",
+            "A finding at a blocking severity means the submission requires review. A scan that failed is an error, never a pass.",
           ],
         ];
 
@@ -184,12 +184,12 @@ function Verdicts({ assetType }: { assetType: AssetType }) {
     assetType === "llm"
       ? [
           {
-            key: "auto_approve",
-            text: "Every benchmark gate passed and the judge graded reliably. All benchmarks in the suite must actually have been measured.",
+            key: "pass",
+            text: "Every measurement cleared the threshold its policy sets, and the judge graded reliably. All benchmarks in the suite must actually have been measured.",
           },
           {
-            key: "needs_deep_testing",
-            text: "One or more gates failed or were never measured. The asset is not rejected — it goes to formal deep testing instead of being waved through.",
+            key: "requires_review",
+            text: "One or more measurements fell short of its threshold, or was never taken. The asset is not rejected — it goes to a human instead of through.",
           },
           {
             key: "error",
@@ -199,12 +199,12 @@ function Verdicts({ assetType }: { assetType: AssetType }) {
         ]
       : [
           {
-            key: "auto_approve",
-            text: "The scan completed with no findings at a blocking severity. Only reachable once the severity rule leaves advisory mode.",
+            key: "pass",
+            text: "The scan completed with no findings at a blocking severity, and the scanner reported the artifact safe.",
           },
           {
-            key: "needs_deep_testing",
-            text: "A blocking-severity finding — or advisory mode, where every result goes to human review regardless of findings.",
+            key: "requires_review",
+            text: "A finding at one of the severities the policy blocks on, or a scanner verdict of not safe.",
           },
           {
             key: "error",
@@ -363,7 +363,9 @@ function BenchmarkSuite({
 function SeverityRule({
   scanner,
 }: {
-  scanner: { mode: string; block_on: string[]; trust_scanner_verdict: boolean } | undefined;
+  scanner:
+    | { block_on: string[]; trust_scanner_verdict: boolean; max_source_files: number }
+    | undefined;
 }) {
   return (
     <section className="space-y-3">
@@ -382,9 +384,9 @@ function SeverityRule({
       {scanner && (
         <dl className="grid overflow-hidden rounded-card border border-rule bg-surface sm:grid-cols-3">
           {[
-            ["Mode", scanner.mode],
             ["Blocks on", scanner.block_on.join(", ")],
             ["Trusts scanner verdict", String(scanner.trust_scanner_verdict)],
+            ["Files examined per scan", String(scanner.max_source_files)],
           ].map(([label, value], index) => (
             <div
               key={label}
@@ -397,14 +399,6 @@ function SeverityRule({
             </div>
           ))}
         </dl>
-      )}
-      {scanner?.mode === "advisory" && (
-        <p className="rounded-card border border-warn/30 bg-warn-wash px-4 py-3 text-[12px] leading-relaxed text-warn">
-          <strong className="font-medium">Advisory mode.</strong> Every result goes to human
-          review and nothing is auto-approved, because the severity rule has no false-positive
-          baseline yet. Graduating to gating is a policy change, made against the severity
-          distribution real submissions produce.
-        </p>
       )}
     </section>
   );

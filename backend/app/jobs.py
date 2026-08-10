@@ -48,6 +48,42 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+# Decisions recorded before the vocabulary was simplified. The rule they encoded is the same one
+# that applies now — a measurement cleared its thresholds or it did not — so these are renamed
+# rather than discarded. Deleting the rows would destroy the audit trail; leaving them makes
+# every historical decision unreadable, because the enum no longer contains the stored symbol.
+#
+# NOTE ON THE STORED FORM: SQLAlchemy's Enum column persists the member NAME, not its value, so
+# the database holds "NEEDS_DEEP_TESTING" rather than "needs_deep_testing". An earlier version of
+# this migration matched on values and therefore did nothing at all — silently, because a
+# no-op UPDATE is indistinguishable from a completed one. Both forms are mapped now, and the
+# tests exercise the name form specifically.
+_RENAMED_DECISIONS = {
+    "AUTO_APPROVE": "PASS",
+    "NEEDS_DEEP_TESTING": "REQUIRES_REVIEW",
+    # Value form too, in case a row was ever written by a path that stored values.
+    "auto_approve": "PASS",
+    "needs_deep_testing": "REQUIRES_REVIEW",
+}
+
+
+def migrate_decision_vocabulary(session: Session) -> int:
+    """Rename historical decision symbols in place. Idempotent; runs on every startup."""
+    from sqlalchemy import text as sql_text
+
+    renamed = 0
+    for old, new in _RENAMED_DECISIONS.items():
+        result = session.exec(
+            sql_text("UPDATE run SET decision = :new WHERE decision = :old").bindparams(
+                new=new, old=old
+            )
+        )
+        renamed += result.rowcount or 0
+    if renamed:
+        session.commit()
+    return renamed
+
+
 def close_orphaned_runs(session: Session) -> int:
     """Fail any run left `running`/`pending` by a previous process. Called at startup.
 
@@ -548,7 +584,7 @@ def _finalize_run(
                 decision=(
                     Decision.ERROR
                     if Decision.ERROR in (outcome.decision, weights_outcome.decision)
-                    else Decision.NEEDS_DEEP_TESTING
+                    else Decision.REQUIRES_REVIEW
                 ),
                 reason=(
                     f"Supply chain: {weights_outcome.reason}"

@@ -216,7 +216,7 @@ async def _scan_case(
         )
         # Advisory mode never approves, so "blocked" must mean a real blocking signal rather
         # than the mode. Otherwise every case would look like a detection.
-        blocking = [r for r in outcome.blocking_reasons if r != "advisory_mode"]
+        blocking = list(outcome.blocking_reasons)
 
         return CaseResult(
             corpus=corpus,

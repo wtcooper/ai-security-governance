@@ -169,7 +169,7 @@ def severity_stats(session: SessionDep) -> dict[str, object]:
         "by_severity": by_severity,
         "by_analyzer": by_analyzer,
         "note": (
-            "Use this to decide whether the configured block_on severities are workable "
-            "before flipping mcp/skill from advisory to gating in policy.yaml."
+            "Evidence for choosing which severities should block. If a severity fires on "
+            "nearly every submission it is not discriminating, and belongs out of block_on."
         ),
     }

@@ -30,6 +30,18 @@ class PolicyValidationError(ValueError):
     """Raised when policy content is structurally wrong. The message names the problem."""
 
 
+# Keys that older policy versions legitimately contain and current ones must not.
+#
+# Immutable versioning only means something if a historical document still LOADS: a run records
+# the version that governed it, and resolving that version has to keep working forever. So a
+# retired key is ignored when READING a stored document and rejected when WRITING a new one —
+# history stays readable, and the retired concept cannot return through the form or the API.
+#
+# `mode` was the advisory/gating switch. It is gone: a finding at a blocking severity means the
+# submission requires review, and the judgement is in choosing which severities those are.
+LEGACY_SCANNER_KEYS = frozenset({"mode"})
+
+
 @dataclass(frozen=True)
 class Gate:
     """One benchmark's threshold, on that benchmark's own headline metric."""
@@ -60,22 +72,18 @@ class Gate:
 class ScannerPolicy:
     """Severity rule for scanner-backed asset classes.
 
-    `advisory` exists because we have no false-positive baseline yet: an untuned severity
-    rule must not be trusted to approve anything, so it can only ever withhold approval.
+    One rule: a finding at a blocking severity means the submission requires review. There is
+    no second decision mode — the judgement is in choosing which severities block, which is a
+    policy edit.
     """
 
-    mode: str  # "advisory" | "gating"
     block_on: frozenset[Severity]
     trust_scanner_verdict: bool
     severity_penalty: dict[Severity, int] = field(default_factory=dict)
     # How many source files the behavioral analyzer examines in one scan. Governed rather than
     # hard-coded: it trades assessment coverage against wall clock, which is a decision for
     # whoever owns the policy, not a constant chosen during development.
-    max_source_files: int = 200
-
-    @property
-    def is_advisory(self) -> bool:
-        return self.mode == "advisory"
+    max_source_files: int = 5000
 
 
 @dataclass(frozen=True)
@@ -225,14 +233,21 @@ def _parse_llm_doc(text: str) -> dict[str, Any]:
     return data
 
 
-def _parse_scanner_doc(asset_type: AssetType, text: str) -> dict[str, Any]:
-    """Parse + validate an MCP/skill policy document. Returns the loaded data."""
+def _parse_scanner_doc(
+    asset_type: AssetType, text: str, strict: bool = True
+) -> dict[str, Any]:
+    """Parse + validate an MCP/skill policy document. Returns the loaded data.
+
+    `strict` is False when loading a STORED version, so a retired key in a historical document
+    does not make that version — and every run recorded against it — unloadable.
+    """
     what = f"{asset_type.value} policy"
     data = _require_mapping(yaml.safe_load(text), what)
+    if not strict:
+        data = {key: value for key, value in data.items() if key not in LEGACY_SCANNER_KEYS}
     _reject_unknown_keys(
         data,
         {
-            "mode",
             "block_on",
             "trust_scanner_verdict",
             "severity_rollup_penalty",
@@ -240,10 +255,6 @@ def _parse_scanner_doc(asset_type: AssetType, text: str) -> dict[str, Any]:
         },
         what,
     )
-
-    mode = data.get("mode", "advisory")
-    if mode not in ("advisory", "gating"):
-        raise PolicyValidationError(f"{what}: mode must be 'advisory' or 'gating', got {mode!r}")
 
     block_on = data.get("block_on", ["critical", "high"])
     valid = {s.value for s in Severity}
@@ -271,12 +282,18 @@ def _parse_scanner_doc(asset_type: AssetType, text: str) -> dict[str, Any]:
     return data
 
 
-def validate_class_content(asset_type: AssetType, text: str) -> dict[str, Any]:
-    """Validate a policy document for an asset class. Raises PolicyValidationError."""
+def validate_class_content(
+    asset_type: AssetType, text: str, strict: bool = True
+) -> dict[str, Any]:
+    """Validate a policy document for an asset class. Raises PolicyValidationError.
+
+    Strict by default: anything being SAVED must be current. Pass strict=False to load a stored
+    version, which may predate a key's retirement and must still resolve.
+    """
     try:
         if asset_type is AssetType.LLM:
             return _parse_llm_doc(text)
-        return _parse_scanner_doc(asset_type, text)
+        return _parse_scanner_doc(asset_type, text, strict=strict)
     except yaml.YAMLError as exc:
         raise PolicyValidationError(f"not valid YAML: {exc}") from exc
 
@@ -298,21 +315,20 @@ def _gate_from_spec(check_id: str, spec: dict[str, Any]) -> Gate:
 
 def _scanner_from_data(data: dict[str, Any]) -> ScannerPolicy:
     return ScannerPolicy(
-        mode=str(data.get("mode", "advisory")),
         block_on=frozenset(Severity(s) for s in data.get("block_on", ["critical", "high"])),
         trust_scanner_verdict=bool(data.get("trust_scanner_verdict", True)),
         severity_penalty={
             Severity(k): int(v)
             for k, v in (data.get("severity_rollup_penalty") or {}).items()
         },
-        max_source_files=int(data.get("max_source_files", 200)),
+        max_source_files=int(data.get("max_source_files", 5000)),
     )
 
 
 def build_policy(docs: dict[AssetType, tuple[str, str]]) -> Policy:
     """Build the runtime Policy from {asset_type: (yaml_text, version_label)}."""
     llm_text, llm_version = docs[AssetType.LLM]
-    llm = validate_class_content(AssetType.LLM, llm_text)
+    llm = validate_class_content(AssetType.LLM, llm_text, strict=False)
     judge = llm.get("judge") or {}
     supply = llm.get("weights") or {}
 
@@ -323,7 +339,7 @@ def build_policy(docs: dict[AssetType, tuple[str, str]]) -> Policy:
     }
     for asset_type in (AssetType.MCP, AssetType.SKILL):
         text, version = docs[asset_type]
-        data = validate_class_content(asset_type, text)
+        data = validate_class_content(asset_type, text, strict=False)
         scanner[asset_type] = _scanner_from_data(data)
         raw[asset_type.value] = data
         meta[asset_type] = ClassMeta(version=version, content_hash=content_hash(text))

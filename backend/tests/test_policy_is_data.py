@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from app.models import AssetType, Decision, Direction, Provenance, Score
+from app.models import AssetType, Decision, Direction, Provenance, Score, Severity
 from app.scoring import gates
 from app.scoring.policy import build_policy, load_policy_dir
 
@@ -55,7 +55,7 @@ def test_a_stored_run_can_be_redecided_under_a_new_policy():
     lenient = build_policy(docs)
 
     scores = _scores_for(lenient, _borderline_values(lenient))
-    assert gates.decide_llm(lenient, scores).decision is Decision.AUTO_APPROVE
+    assert gates.decide_llm(lenient, scores).decision is Decision.PASS
 
     # Tighten one higher-is-better threshold. No code changes; only the document.
     llm_text, _ = docs[AssetType.LLM]
@@ -65,7 +65,7 @@ def test_a_stored_run_can_be_redecided_under_a_new_policy():
     assert strict.llm_gates["cyse4_multilingual_prompt_injection"].threshold == 0.99
 
     outcome = gates.decide_llm(strict, scores)
-    assert outcome.decision is Decision.NEEDS_DEEP_TESTING
+    assert outcome.decision is Decision.REQUIRES_REVIEW
     assert any("cyse4_multilingual_prompt_injection" in r for r in outcome.blocking_reasons)
 
 
@@ -90,27 +90,34 @@ def test_policy_hash_changes_when_a_threshold_changes():
     assert third.meta[AssetType.LLM].content_hash == first.meta[AssetType.LLM].content_hash
 
 
-def test_advisory_to_gating_is_a_one_line_config_change():
-    """The documented path out of advisory mode must actually be one edit."""
+def test_a_severity_rule_edit_changes_the_outcome_without_a_code_change():
+    """The scanner equivalent of criterion 5.2, after advisory mode was removed.
+
+    Human judgement now lives entirely in choosing which severities block. Removing one from
+    `block_on` must change a decision, with no code involved.
+    """
     docs = _seed_docs()
-    advisory = build_policy(docs)
-    assert advisory.scanner[AssetType.MCP].is_advisory
+    strict = build_policy(docs)
+    counts = {Severity.HIGH: 2}
+
     assert (
-        gates.decide_scanner(advisory, AssetType.MCP, {}, scanner_says_safe=True).decision
-        is Decision.NEEDS_DEEP_TESTING
+        gates.decide_scanner(strict, AssetType.MCP, counts, scanner_says_safe=True).decision
+        is Decision.REQUIRES_REVIEW
     )
 
     mcp_text, _ = docs[AssetType.MCP]
-    gating_docs = dict(docs)
-    gating_docs[AssetType.MCP] = (mcp_text.replace("mode: advisory", "mode: gating", 1), "2")
-    gating = build_policy(gating_docs)
-    assert not gating.scanner[AssetType.MCP].is_advisory
+    lenient_docs = dict(docs)
+    lenient_docs[AssetType.MCP] = (
+        mcp_text.replace("block_on: [critical, high]", "block_on: [critical]"),
+        "2",
+    )
+    lenient = build_policy(lenient_docs)
     assert (
-        gates.decide_scanner(gating, AssetType.MCP, {}, scanner_says_safe=True).decision
-        is Decision.AUTO_APPROVE
+        gates.decide_scanner(lenient, AssetType.MCP, counts, scanner_says_safe=True).decision
+        is Decision.PASS
     )
     # The other scanner class is untouched by the edit.
-    assert gating.scanner[AssetType.SKILL].is_advisory
+    assert Severity.HIGH in lenient.scanner[AssetType.SKILL].block_on
 
 
 def test_shipped_thresholds_are_all_within_range():

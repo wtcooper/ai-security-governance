@@ -103,19 +103,3 @@ def test_skill_labels_are_read_from_the_corpus(tmp_path):
     assert by_name["safe-one"] is False
 
 
-def test_advisory_mode_is_not_counted_as_a_detection():
-    """Criterion 6.5 — the load-bearing detail of this whole measurement.
-
-    Advisory mode blocks every scan, so if `advisory_mode` counted as a blocking reason the
-    calibration would report 100% recall against an empty scanner. Detection has to mean a real
-    finding, which is why `_scan_case` filters that reason out before deciding `blocked`.
-    """
-    import inspect as _inspect
-
-    from app.engines import calibration
-
-    source = _inspect.getsource(calibration._scan_case)
-    assert 'r != "advisory_mode"' in source, (
-        "advisory_mode must be excluded from blocking reasons, or recall measures the mode "
-        "rather than detection"
-    )

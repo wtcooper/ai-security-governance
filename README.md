@@ -3,7 +3,7 @@
 Self-service security evaluation and governance thresholds for AI assets — foundation models,
 MCP servers, and agent skills.
 
-Submit an asset, get a decision: **auto-approve**, or **needs deep testing**. Every result is
+Submit an asset, get a decision: **pass**, or **requires review**. Every result is
 measured against a written threshold and records which models and which policy produced it.
 
 ## Why
@@ -31,8 +31,8 @@ Two rules shape the design:
 |---|---|---|
 | **AI model** (open weights or frontier) | 7 security benchmarks via [Inspect AI](https://inspect.aisi.org.uk) across seven risk dimensions — CyberSecEval-4, StrongREJECT, AgentDojo, AgentThreatBench | one threshold per benchmark, on that benchmark's own headline metric |
 | **Open weights** | 5 Hugging Face scanners (protectAI, ClamAV, picklescan, VirusTotal, JFrog), harvested not recomputed | any file any scanner calls unsafe blocks; *not scanned* ≠ safe |
-| **MCP server** | full [`mcp-scanner`](https://github.com/cisco-ai-defense/mcp-scanner) sweep of cloned source or an uploaded zip | severity rule, advisory by default |
-| **Agent skill** | full [`skill-scanner`](https://github.com/cisco-ai-defense/skill-scanner) sweep of cloned source or an uploaded zip | severity rule + the scanner's own verdict, advisory by default |
+| **MCP server** | full [`mcp-scanner`](https://github.com/cisco-ai-defense/mcp-scanner) sweep of cloned source or an uploaded zip | severity rule: a finding at a blocking severity requires review |
+| **Agent skill** | full [`skill-scanner`](https://github.com/cisco-ai-defense/skill-scanner) sweep of cloned source or an uploaded zip | severity rule plus the scanner's own verdict |
 
 The model suite is deliberately all pure-API or in-memory simulation — no Docker sandboxes —
 so a governance run is repeatable and costs a bounded, visible number of model calls.
@@ -48,25 +48,20 @@ The suite is chosen by **risk dimension**, not by reputation. One benchmark per 
 dimension counted twice, and each one has to earn its compute. Seven gates cover seven
 dimensions:
 
-| Tier | Benchmark | Dimension it covers | Why it is in the set |
-|---|---|---|---|
-| **1** | `cyse4_mitre` | Direct misuse | Will it help an attacker who simply asks? The baseline question. |
-| **1** | `cyse4_mitre_frr` | Over-refusal | Its mandatory pair — without it a model passes the above by refusing everything, which is useless to a security team. |
-| **1** | `strong_reject` | Jailbreak robustness | The only gate where the **attacker is the user**. 37 attack transformations, and a grader that scores refusal, convincingness and specificity separately so empty compliance is not mistaken for a jailbreak. |
-| **1** | `cyse4_instruct` | Insecure code | The everyday risk: models write production code. Deterministic semgrep detection, no judge. |
-| **2** | `cyse4_multilingual_prompt_injection` | Injection via content | Untrusted text overriding instructions, across languages — a common filter bypass. |
-| **2** | `agentdojo` | Injection via tools | Untrusted **tool output** redirecting an agent mid-task, over 629 security cases in realistic environments. |
-| **2** | `atb_memory_poison` | Memory poisoning | OWASP ASI06: an injection planted in one task that pays off in a later, unrelated one — the only dimension where attack and effect are separated in time. |
+| Benchmark | Dimension it covers | Why it is in the set |
+|---|---|---|
+| `cyse4_mitre` | Direct misuse | Will it help an attacker who simply asks? The baseline question. |
+| `cyse4_mitre_frr` | Over-refusal | Its mandatory pair — without it a model passes the above by refusing everything, which is useless to a security team. |
+| `strong_reject` | Jailbreak robustness | The only gate where the **attacker is the user**. 37 attack transformations, and a grader that scores refusal, convincingness and specificity separately so empty compliance is not mistaken for a jailbreak. |
+| `cyse4_instruct` | Insecure code | The everyday risk: models write production code. Deterministic semgrep detection, no judge. |
+| `cyse4_multilingual_prompt_injection` | Injection via content | Untrusted text overriding instructions, across languages — a common filter bypass. |
+| `agentdojo` | Injection via tools | Untrusted **tool output** redirecting an agent mid-task, over 629 security cases in realistic environments. |
+| `atb_memory_poison` | Memory poisoning | OWASP ASI06: an injection planted in one task that pays off in a later, unrelated one — the only dimension where attack and effect are separated in time. |
 
-**Tier 1 is the select set: four gates, text-only, no tool-calling required.** It runs on any
-model including small open-weight ones, and covers misuse, over-refusal, jailbreak robustness
-and insecure code.
-
-**Tier 2 adds the agentic dimensions** and is required for any model you will deploy with
-tools. It carries a caveat worth stating plainly: `agentdojo` and `atb_memory_poison` score
-security from tool-call behaviour, so **a model too weak to call tools reliably scores well by
-failing to act.** Both record an ungated utility metric beside the security one for exactly
-this reason — read them together, or the number flatters incompetence. (We measured this: one
+One caveat worth stating plainly: `agentdojo` and `atb_memory_poison` score security from
+tool-call behaviour, so **a model too weak to call tools reliably scores well by failing to
+act.** Both record an ungated utility metric beside the security one for exactly this reason —
+read them together, or the number flatters incompetence. (We measured this: one
 AgentThreatBench task produced *no score at all* on a small local model because it emitted a
 malformed tool call.)
 
@@ -277,17 +272,19 @@ and direction come from the benchmark registry and are never editable, because t
 about the benchmark rather than preferences. **Only benchmarks in the suite run** — one
 registered but not enabled is available to add and never silently consumes compute.
 
-### Graduating MCP/skills out of advisory mode
+### Choosing which severities block
 
 ```bash
 curl -s localhost:8000/api/stats/severity   # findings by analyzer and severity, all runs
 ```
 
-When the distribution shows `block_on` is discriminating rather than firing on everything, change
-`mode: advisory` to `mode: gating` for that asset class. That single line is the whole change.
+A severity belongs in `block_on` when its presence genuinely distinguishes submissions. If it
+fires on nearly everything it is not discriminating, and blocking on it means every asset
+requires review regardless of merit — which is the same as having no rule. This distribution is
+the evidence for that decision, and changing it is a policy edit.
 
 Note that `mcp-scanner` has no CRITICAL severity — HIGH is the top of its scale and is what
-blocks there. `skill-scanner` does emit CRITICAL.
+actually blocks there. `skill-scanner` does emit CRITICAL.
 
 ## Security testing of this tool
 
@@ -420,8 +417,9 @@ analyzer is off by default.
 
 **The most useful result is the worst one.** A legitimate benign MCP server
 (`evals/remote/benign/GitHub_tools`) was flagged HIGH — 1 of the 2 benign MCP servers that
-produced a result. That is direct evidence the MCP severity rule is not yet safe to auto-approve
-against, and it is why MCP stays in `advisory` mode. The skill rule looks better: all four safe
+produced a result. That is direct evidence the MCP severity rule is not yet well calibrated —
+one benign server in four being flagged is a high false-positive rate. The skill rule looks
+better: all four safe
 skills produced zero findings.
 
 A third benign MCP server (`azure_tools`) **timed out at 900s**, which is the scan-time
@@ -444,7 +442,7 @@ reports are committed under `data/calibration/`.
   lands as an escaped JSX text child, no raw-HTML sink anywhere).
 - Recall is measured on one sample per MCP threat category, not all 141 servers.
 - The false-positive denominators are 2 and 4. Enough to show the skill rule discriminates and
-  that the MCP rule does not yet; nowhere near enough to justify auto-approval.
+  that the MCP rule does not yet; nowhere near enough to call either rule calibrated.
 - The corpora are the scanner vendor's own, so they are likely favourable to their detections.
 - No third-party penetration test.
 
@@ -460,9 +458,11 @@ Worth reading before trusting a result:
   dataset rather than a sample of it — there is no deeper run available. A test now asserts
   every gate tolerates at least one failure, which is what caught two sibling gates being
   arithmetically zero-tolerance (0.90 over n=6 and n=8) before they were retired.
-- **MCP and skills run in advisory mode.** They can withhold approval but never grant it, because
-  the false-positive baseline is thin — 3 benign MCP servers and 4 safe skills in the vendor
-  corpora. Adding benign servers is the prerequisite for `mode: gating`.
+- **The scanner severity rules are barely calibrated.** The false-positive baseline is thin —
+  3 benign MCP servers and 4 safe skills in the vendor corpora, and one of those benign servers
+  was flagged HIGH. Expect MCP in particular to send passable servers to review until
+  `block_on` is tuned against real submissions. Treat a *pass* from a scanner class as weaker
+  evidence than a pass from the benchmark suite.
 - **Assessment coverage is capped, and the cap is a policy setting.** The behavioral analyzer
   makes one model call per source file, so `max_source_files` (default 200) bounds a scan.
   Anything beyond it is reported as a finding whose severity reflects how much went unexamined
@@ -490,8 +490,8 @@ Worth reading before trusting a result:
 
 Ideas, roughly in order of value:
 
-- **Calibrate the thresholds** against a funded run of models the org actually uses, and graduate
-  MCP/skills out of advisory mode once a benign corpus exists.
+- **Calibrate the thresholds** against a funded run of models the org actually uses, and tune
+  the scanner `block_on` rules once a benign corpus exists.
 - **Benign MCP corpus** — scan and review a set of well-known public servers to establish the
   false-positive baseline the severity rule is missing.
 - **Local weight scanning** with [`modelaudit`](https://www.promptfoo.dev/docs/model-audit/) for

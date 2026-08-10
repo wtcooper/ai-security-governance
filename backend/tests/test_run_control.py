@@ -67,7 +67,7 @@ def test_orphaned_runs_are_failed_on_startup(tmp_path):
     with Session(engine) as session:
         session.add(Run(asset_id=1, status=RunStatus.RUNNING))
         session.add(Run(asset_id=1, status=RunStatus.PENDING))
-        done = Run(asset_id=1, status=RunStatus.COMPLETE, decision=Decision.NEEDS_DEEP_TESTING)
+        done = Run(asset_id=1, status=RunStatus.COMPLETE, decision=Decision.REQUIRES_REVIEW)
         session.add(done)
         session.commit()
 
@@ -84,7 +84,7 @@ def test_orphaned_runs_are_failed_on_startup(tmp_path):
             assert run.finished_at is not None
         # The completed run is untouched.
         untouched = next(r for r in runs if r.status is RunStatus.COMPLETE)
-        assert untouched.decision is Decision.NEEDS_DEEP_TESTING
+        assert untouched.decision is Decision.REQUIRES_REVIEW
 
 
 def test_grouped_metric_extras_do_not_collide():
@@ -161,3 +161,45 @@ def test_progress_reports_the_suite_the_run_was_started_under(tmp_path):
         assert len(resolved.llm_gates) == original, (
             "the run's progress suite must not shrink when the active suite does"
         )
+
+
+def test_historical_decisions_are_renamed_not_orphaned(tmp_path):
+    """A run recorded under the old vocabulary must stay readable.
+
+    The subtlety that made the first attempt at this a no-op: SQLAlchemy's Enum column persists
+    the member NAME, so the database holds "NEEDS_DEEP_TESTING", not "needs_deep_testing". A
+    migration matching on values updated zero rows and reported success, and every historical
+    run then failed to load. This test writes the NAME form deliberately.
+    """
+    from sqlalchemy import text as sql_text
+    from sqlmodel import Session, SQLModel, create_engine
+
+    from app.jobs import migrate_decision_vocabulary
+    from app.models import Decision
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'legacy.db'}")
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as session:
+        session.exec(
+            sql_text(
+                "INSERT INTO run (asset_id, status, decision, started_at) VALUES "
+                "(1, 'COMPLETE', 'NEEDS_DEEP_TESTING', '2026-01-01 00:00:00'), "
+                "(1, 'COMPLETE', 'AUTO_APPROVE', '2026-01-01 00:00:00')"
+            )
+        )
+        session.commit()
+
+        assert migrate_decision_vocabulary(session) == 2
+        stored = {row[0] for row in session.exec(sql_text("SELECT decision FROM run")).all()}
+        assert stored == {"REQUIRES_REVIEW", "PASS"}
+
+        # The rows now load through the ORM, which is the point.
+        from sqlmodel import select
+
+        from app.models import Run
+
+        decisions = {run.decision for run in session.exec(select(Run)).all()}
+        assert decisions == {Decision.REQUIRES_REVIEW, Decision.PASS}
+
+        # Idempotent: a second pass changes nothing.
+        assert migrate_decision_vocabulary(session) == 0

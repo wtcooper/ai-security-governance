@@ -55,7 +55,7 @@ scripts/e2e.sh --keep-up    # leave the stack running afterwards
 | 1.3 | Metric keys in `registry.py` match what the scorers actually emit | asserted against the live eval output, not documentation |
 | 1.4 | One gate per benchmark; no sub-dimension is ever thresholded | unit test: `gated=false` scores are excluded from gate evaluation |
 | 1.5 | Composite score is displayed but never gates | unit test: changing composite alone cannot change the decision |
-| 1.6 | A missing required check yields `NEEDS_DEEP_TESTING`, never `AUTO_APPROVE` | unit test on `gates.py` |
+| 1.6 | A missing required check yields `REQUIRES_REVIEW`, never `PASS` | unit test on `gates.py` |
 | 1.7 | Judge refusals are counted as unresolved, never as passes | fixture of refusal responses through the real scorer path |
 | 1.8 | `judge_refusal_rate` over policy limit ⇒ run `ERROR / judge unreliable`, no decision emitted | real run with a deliberately refusing judge |
 | 1.9 | Run detail page shows subject model, judge model, refusal rate, and per-score provenance | HTTP fetch of the rendered page |
@@ -76,7 +76,7 @@ scripts/e2e.sh --keep-up    # leave the stack running afterwards
 | 3.1 | A public MCP repo clones and scans end to end with the scanner LLM on the gateway | real run |
 | 3.2 | The full analyzer set runs; findings retain `analyzer`, `severity`, `rule_id`, `file_path` | assert distinct analyzers present in findings |
 | 3.3 | A deliberately poisoned tool description produces CRITICAL/HIGH findings | real run against a crafted fixture |
-| 3.4 | Advisory mode never returns `AUTO_APPROVE`, even on a clean scan | real run against a benign repo |
+| 3.4 | A finding at a blocking severity yields `REQUIRES_REVIEW`; a clean scan with a safe verdict yields `PASS` | `tests/test_gates.py` single-rule tests |
 | 3.5 | `engine_version` and `ruleset_version` are recorded on every run | assert both are non-null |
 | 3.6 | Untrusted code is never executed: no `stdio`/`remote` launch unless explicitly opted in | unit test that the default path uses static/behavioral only |
 | 3.7 | Zip upload rejects path traversal and oversize archives | unit test with a zip-slip archive |
@@ -88,7 +88,7 @@ scripts/e2e.sh --keep-up    # leave the stack running afterwards
 | 4.1 | A public skill repo scans end to end with the scanner LLM on the gateway | real run |
 | 4.2 | SARIF ingests; severity counts agree with the raw SARIF artifact | cross-check parsed rows against the stored file |
 | 4.3 | The scanner's own `is_safe` verdict is honoured rather than re-derived | real run assertion |
-| 4.4 | Advisory mode never returns `AUTO_APPROVE` | real run against a benign skill |
+| 4.4 | The same single severity rule applies to skills | `tests/test_gates.py` |
 
 ## Phase 6 — Detection calibration against the vendor corpora
 
@@ -102,7 +102,7 @@ the scanners: a finding a scanner emits and we fail to parse is a miss for gover
 | 6.2 | Labels come from the corpus, never inferred | `_expected.json` `expected_safe` plus the safe/malicious directory split |
 | 6.3 | Recall reported per corpus with missed categories named | report `summary()` lists `per_category_misses` |
 | 6.4 | FP rate reported **with its denominator** and flagged when thin | `fp_denominator_warning` set below 20 benign cases |
-| 6.5 | `advisory_mode` excluded from blocking reasons | unit test — otherwise recall would measure the mode, not detection |
+| 6.5 | Recall measures detection, not decision mode | there is no decision mode; blocking reasons come only from findings |
 | 6.6 | Sampling is recorded, never silent | `sampling.cases_run` and a note that sampled recall is an estimate |
 
 **Known limit:** FP denominators are 3 benign MCP servers and 4 safe skills. Enough to catch a
@@ -128,7 +128,7 @@ servers added before `gating`.
 | 5.2 | Threshold changes require editing the policy only, never code | change a threshold, re-decide a stored run, observe the flip |
 | 5.3 | `policy_hash` is recorded per run so historical decisions stay interpretable | assert hash changes when policy changes |
 | 5.4 | `GET /api/stats/severity` reports the distribution used to hand-tune `block_on` | live call |
-| 5.5 | README documents Colima, compose, gateway config, Postgres swap, advisory→gating | review |
+| 5.5 | README documents Colima, compose, gateway config, Postgres swap, severity rules | review |
 
 ## Phase 8 — Versioned policies, benchmark transparency, explainability
 
@@ -173,3 +173,14 @@ servers added before `gating`.
 | 10.6 | Default depth is Good (n=100, ±6 points at p≈0.9), not a wiring-check count | policy seed + `test_current_form_values_round_trip` |
 | 10.7 | An ungated benchmark is offered at standard depth, so enabling it cannot silently add a 25-sample gate | `test_an_ungated_benchmark_is_offered_at_standard_depth_not_wiring_depth` |
 | 10.8 | Sample counts are fully user-controlled: presets, per-gate override, or a pinned core set | policy form; browser-verified |
+
+## Phase 11 — One decision rule
+
+| # | Criterion | How it is verified |
+|---|---|---|
+| 11.1 | Exactly two outcomes plus an error state: `pass`, `requires_review`, `error` | `Decision` enum; no third mode anywhere |
+| 11.2 | A clean scan with a safe verdict passes; a blocking-severity finding requires review | `tests/test_gates.py::test_a_clean_scan_passes` and siblings |
+| 11.3 | A non-blocking severity never decides the outcome | `test_a_non_blocking_severity_does_not_require_review` |
+| 11.4 | Editing `block_on` changes the outcome with no code change | `test_a_severity_rule_edit_changes_the_outcome_without_a_code_change` |
+| 11.5 | An empty or unknown `block_on` is rejected rather than silently approving everything | `tests/test_policy_versions.py` |
+| 11.6 | Decisions recorded under the old vocabulary are renamed, not orphaned | `migrate_decision_vocabulary`, idempotent at startup |

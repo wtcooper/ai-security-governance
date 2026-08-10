@@ -100,7 +100,7 @@ of a past decision. Edit them on the **Policies** page; there is no YAML to hand
 
 | Setting | What it controls |
 |---|---|
-| **Blocking severities** | Which finding severities mean the submission requires review. This is the judgement call — there is no second decision mode on top of it. |
+| **Blocking severities** | Which finding severities mean the submission requires review. This is the judgement call — there is no second decision mode on top of it. Note that `mcp-scanner` has no CRITICAL: HIGH is the top of its scale and is what blocks there, while `skill-scanner` does emit CRITICAL. |
 | **Trust the scanner verdict** | Whether the scanner's own overall verdict is honoured rather than re-derived. |
 | **Files examined per scan** | Assessment coverage. The behavioral analyzer makes one model call per file, so this trades coverage against wall clock. Exceeding it **warns and reports exactly what was left out** — it never fails the submission. |
 | **Severity roll-up** | Weights used to order the evaluations table. Never gates. |
@@ -177,18 +177,11 @@ artifact someone submits, so the scanner is the evaluation and the gate is a sev
 Finding counts track how much code there is rather than how dangerous it is, which is why a
 0–100 score over them would be invented precision.
 
-### Choosing which severities block
-
-```bash
-curl -s localhost:8000/api/stats/severity   # findings by analyzer and severity, all runs
-```
-
-A severity belongs in `block_on` when its presence genuinely distinguishes submissions. If it
-fires on nearly everything it is not discriminating, and blocking on it means every asset
-requires review regardless of merit — the same as having no rule.
-
-Note that `mcp-scanner` has no CRITICAL severity: HIGH is the top of its scale and is what
-actually blocks there. `skill-scanner` does emit CRITICAL.
+Which severities block is a policy setting like any other, and tuning it is the one judgement
+call these two classes need. A severity earns its place in the rule when its presence genuinely
+distinguishes submissions; one that fires on nearly everything sends every asset to review
+regardless of merit, which is the same as having no rule. `GET /api/stats/severity` returns
+finding counts by analyzer and severity across all recorded runs as the evidence for that call.
 
 ## Testing
 
@@ -199,11 +192,7 @@ scripts/e2e.sh                   # builds, launches, verifies against a running 
 
 The end-to-end suite makes **real** model calls through the gateway to local models, so a full
 run costs nothing. Success criteria are written down as checkable gates in
-[docs/ACCEPTANCE.md](docs/ACCEPTANCE.md).
-
-**→ [docs/SECURITY_TESTING.md](docs/SECURITY_TESTING.md)** — this tool reviewed with Claude
-Code's `security-review` skill and the `claude-security` multi-agent plugin, including the
-findings, the detection-calibration numbers, and what that evidence does *not* establish.
+[docs/specs/ACCEPTANCE.md](docs/specs/ACCEPTANCE.md).
 
 ## Safety of the tool itself
 
@@ -215,6 +204,11 @@ tool. Submitted code is **never executed**:
 - Non-URL submissions must resolve inside an allowlisted directory.
 - `mcp-scanner`'s `stdio`/`remote` modes *launch* the server under test, so they are off by
   default.
+
+**→ [docs/SECURITY_TESTING.md](docs/SECURITY_TESTING.md)** — this tool reviewed against those
+claims with Claude Code's `security-review` skill and the `claude-security` multi-agent plugin,
+including the findings, the detection-calibration numbers, and what that evidence does *not*
+establish.
 
 ## Known limitations
 
@@ -236,10 +230,8 @@ Worth reading before trusting a result:
 - **Assessment coverage is capped, and the cap is a policy setting.** The behavioral analyzer
   makes one model call per source file, so `max_source_files` (default 200) bounds a scan.
   Anything beyond it is reported as a finding whose severity reflects how much went unexamined
-  — never as a clean result. Every limit in the codebase is audited in
-  [docs/LIMITS_AUDIT.md](docs/LIMITS_AUDIT.md), which classifies each by what happens when it
-  bites; the rule is that a limit reducing what gets assessed belongs in the policy, and a
-  limit protecting the host belongs in code and must fail closed.
+  — never as a clean result. The rule throughout is that a limit reducing what gets assessed
+  belongs in the policy, and a limit protecting the host belongs in code and must fail closed.
 - **Scan time scales with file count.** A single-server submission takes ~40 seconds including the
   dependency audit. Monorepos are slow because the behavioral analyzer invokes a model per source
   file, so they are capped at 40 files with the shortfall reported *as a finding*. Submit one
@@ -286,9 +278,8 @@ Ideas, roughly in order of value:
 | [docs/GATEWAY.md](docs/GATEWAY.md) | Gateway setup, onboarding a local or API-based model, the alias rule |
 | [docs/BENCHMARKS.md](docs/BENCHMARKS.md) | Why each benchmark earns its place, measured cost, what was excluded and why |
 | [docs/SECURITY_TESTING.md](docs/SECURITY_TESTING.md) | This tool reviewed with Claude Code's `security-review` skill and the `claude-security` plugin |
-| [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md) | Checkable success criteria per phase, executed by `scripts/e2e.sh` |
-| [docs/LIMITS_AUDIT.md](docs/LIMITS_AUDIT.md) | Every cap, timeout and truncation, classified by what happens when it bites |
-| [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) | The build plan and what each phase actually established |
+| [docs/specs/ACCEPTANCE.md](docs/specs/ACCEPTANCE.md) | Checkable success criteria per phase, executed by `scripts/e2e.sh` |
+| [docs/specs/IMPLEMENTATION_PLAN.md](docs/specs/IMPLEMENTATION_PLAN.md) | The build plan and what each phase actually established |
 | [docs/research/](docs/research/) | Benchmark landscape research the suite was chosen from |
 
 ## Contributing

@@ -2,7 +2,7 @@
 # End-to-end acceptance runner.
 #
 # Builds and launches the full stack with docker compose, then verifies every criterion for
-# the completed phases in docs/ACCEPTANCE.md against the running system. Real HTTP, real model
+# the completed phases in docs/specs/ACCEPTANCE.md against the running system. Real HTTP, real model
 # calls, real subprocesses — the only mocks involved are the gateway's mock model routes,
 # used solely to prove the stack boots with zero API keys.
 #

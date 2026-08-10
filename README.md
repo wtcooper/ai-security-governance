@@ -37,87 +37,6 @@ Two rules shape the design:
 The model suite is deliberately all pure-API or in-memory simulation — no Docker sandboxes —
 so a governance run is repeatable and costs a bounded, visible number of model calls.
 
-## The benchmark catalogue — AI models
-
-**This section is about the AI-model asset class only.** MCP servers and agent skills are
-not benchmarked at all: no published benchmark can score an artifact someone submits, so for
-those the *scanner is the evaluation* and the gate is a severity rule. See
-[What it evaluates](#what-it-evaluates).
-
-The suite is chosen by **risk dimension**, not by reputation. One benchmark per dimension, no
-dimension counted twice, and each one has to earn its compute. Seven gates cover seven
-dimensions:
-
-| Benchmark | Dimension it covers | Why it is in the set |
-|---|---|---|
-| `cyse4_mitre` | Direct misuse | Will it help an attacker who simply asks? The baseline question. |
-| `cyse4_mitre_frr` | Over-refusal | Its mandatory pair — without it a model passes the above by refusing everything, which is useless to a security team. |
-| `strong_reject` | Jailbreak robustness | The only gate where the **attacker is the user**. 37 attack transformations, and a grader that scores refusal, convincingness and specificity separately so empty compliance is not mistaken for a jailbreak. |
-| `cyse4_instruct` | Insecure code | The everyday risk: models write production code. Deterministic semgrep detection, no judge. |
-| `cyse4_multilingual_prompt_injection` | Injection via content | Untrusted text overriding instructions, across languages — a common filter bypass. |
-| `agentdojo` | Injection via tools | Untrusted **tool output** redirecting an agent mid-task, over 629 security cases in realistic environments. |
-| `atb_memory_poison` | Memory poisoning | OWASP ASI06: an injection planted in one task that pays off in a later, unrelated one — the only dimension where attack and effect are separated in time. |
-
-One caveat worth stating plainly: `agentdojo` and `atb_memory_poison` score security from
-tool-call behaviour, so **a model too weak to call tools reliably scores well by failing to
-act.** Both record an ungated utility metric beside the security one for exactly this reason —
-read them together, or the number flatters incompetence. (We measured this: one
-AgentThreatBench task produced *no score at all* on a small local model because it emitted a
-malformed tool call.)
-
-### How much to measure
-
-Sample count is the difference between a wiring check and a governance signal, so it is a
-policy setting with three presets on the Policies page rather than a constant in the code:
-
-| Depth | Samples per benchmark | Suite total | 95% CI near a 0.9 pass rate |
-|---|---|---|---|
-| Quick | 25 | 160 tests · ~415 calls | ±12 points — a wiring check, not a signal |
-| **Good** (default) | **100** | **610 tests · ~1,540 calls** | **±6 points** |
-| Full | whole dataset | 5,937 tests · ~14,000 calls | narrowest; for calibration and final decisions |
-
-An interval wider than the decision cannot support the decision — that is why 25 is labelled
-a wiring check and 100 is the default. Each preset applies the same n to every benchmark
-(capped at the real dataset size) so every risk dimension gets equal statistical power. The
-Policies page shows the resulting totals before you commit to a run, and any gate can be
-overridden individually, or pinned to a fixed **core set** of sample ids for exact
-repeatability.
-
-### Also available, deliberately not in the suite
-
-Registered and one checkbox away on the Policies page, left out on purpose:
-
-- **`cyse4_autocomplete`** — measured to share 1,863 of 1,866 vulnerability snippets with
-  `cyse4_instruct`: the same corpus rendered as a completion prompt. A second modality, not a
-  second dimension. Enable it if IDE completion is specifically your deployment.
-- **`atb_autonomy_hijack`, `atb_data_exfil`** — same threat model as `agentdojo`, which
-  measures it over 629 cases instead of 6 and 8.
-- **`cyse4_malware_analysis`, `cyse4_threat_intelligence`** — these measure *defensive
-  usefulness*, a capability question rather than a safety one.
-
-Also assessed and excluded: saturated benchmarks (**Cybench** at ~93%, **CyberMetric**,
-**SecQA**, **WMDP-Cyber** — a measure everything passes cannot inform a decision), **3CB**
-(15 challenges, four withheld), **`cyse4_multiturn_phishing`** (three model calls per sample,
-and persuasion belongs to compliance under our separation of duties), and **b3**, **CodeIPI**
-and **HarmBench** (not runnable as installed). Full reasoning:
-[docs/research/BENCHMARK_ASSESSMENT_2026-08-09.md](docs/research/BENCHMARK_ASSESSMENT_2026-08-09.md).
-
-### The sandbox tier, and one hard exclusion
-
-**CVE-Bench** (40 real web CVEs, ~$25–70 a run) and **CyberGym** (1,507 vulnerabilities,
-236 GB, ~11 h) measure *offensive capability*. They need Docker and human supervision, and
-they answer a different question: high capability is not a failure, it is a **risk-tiering
-signal** that should tighten access and authorization. Neither is part of the automatic gate.
-
-**ExploitGym, SEC-bench Pro and BountyBench are not run here at any tier.** They ask a model
-to develop working exploits, and verifying that needs an environment powerful enough to be
-dangerous. In July 2026 an exploit-generation benchmark run with guardrails disabled ended
-with frontier models
-[escaping their sandbox and compromising Hugging Face's production infrastructure](https://huggingface.co/blog/security-incident-july-2026)
-to steal the answer key. An onboarding gate has no need to elicit offensive capability, so it
-does not — asserted by `tests/test_registry.py::test_no_check_requires_a_sandbox` rather than
-left to reviewer memory.
-
 ## Quick start
 
 Requires Docker. On macOS, [Colima](https://github.com/abiosoft/colima) works well:
@@ -136,141 +55,127 @@ docker compose up --build
 | API docs | http://localhost:8000/docs |
 | Model gateway | http://localhost:4001/health/readiness |
 
-### The bundled gateway is an example, not a recommendation
-
-`gateway/litellm_config.yaml` exists so a clean checkout **runs**. It wires up a couple of
-small local models through [Ollama](https://ollama.com) and nothing more — enough to prove the
-plumbing end to end and to develop against for free. It is a demonstration of *how* to point
-this tool at models, not a suggestion of *which* models to use.
-
-**A real deployment replaces it.** Model choice ages badly, and yours will depend on what your
-organisation actually serves, what your judge budget is, and which models you are being asked
-to onboard. Expect a production gateway config to be considerably more involved than the
-example: real routing, credentials, rate limits, fallbacks and cost controls.
-
 A clean checkout with an empty `.env` boots and passes preflight with **no API key of any
 kind**, so you can see the app work before deciding anything about models.
 
-## Bring your own models
+### How it fits together
 
-Everything speaks **OpenAI-compatible base URL + API key**. There is no assumption of a direct
-provider account anywhere in the stack.
+Three services, each independently buildable so an organisation can take any one of them:
+
+| Service | Role |
+|---|---|
+| **frontend** | Next.js. Submit an asset, read decisions, edit policy. |
+| **backend** | FastAPI. Runs the benchmarks (Inspect AI) and the scanners, evaluates the policy, records decisions in SQLite. |
+| **gateway** | LiteLLM. The single OpenAI-compatible endpoint every compute engine talks to. Separate container by necessity — see [the gateway doc](docs/GATEWAY.md#why-the-gateway-is-a-separate-container). |
+
+Benchmarks run in a **subprocess with every provider credential stripped**, so a task whose
+grader defaults to a hardcoded provider model fails loudly instead of silently billing someone.
+Nothing submitted for scanning is ever executed.
+
+## Configuration
+
+Two things need configuring: **the models** (which the app only ever sees as gateway aliases)
+and **the policy** (which decides what runs and what passes). The policy is the more important
+one, and the one most people underestimate.
+
+### What you can configure in a policy
+
+Each asset class has its own policy, stored in the database as **immutable versions**. Every
+edit creates a new version, the newest version governs new runs, and each run records the
+version and content hash that governed it — so changing a threshold never rewrites the meaning
+of a past decision. Edit them on the **Policies** page; there is no YAML to hand-write.
+
+**AI model policy**
+
+| Setting | What it controls |
+|---|---|
+| **Which benchmarks are in the suite** | A checkbox per benchmark. One not in the suite does not run and costs nothing. Metric and direction are not editable — they are facts about the benchmark, pinned to the registry. |
+| **Threshold** per benchmark | The value its headline metric must clear. This is where human judgement belongs. |
+| **Samples** per benchmark | How many test cases run. Presets — **Quick** (25), **Good** (100, the default), **Full** (whole datasets) — show the resulting test and model-call totals before you commit. Any gate can also be overridden individually, or pinned to a fixed **core set** of sample ids for exact repeatability. |
+| **Composite weight** per benchmark | Orders the evaluations table. Never gates anything. |
+| **Judge model** and **max unresolved-verdict rate** | The grader, and the point above which its output is untrustworthy and the run is voided rather than made lenient. |
+| **Open-weight supply chain** | Whether an unsafe weight file blocks, and whether an unscanned repository counts as passing (it should not). |
+
+**MCP server and agent skill policies**
+
+| Setting | What it controls |
+|---|---|
+| **Blocking severities** | Which finding severities mean the submission requires review. This is the judgement call — there is no second decision mode on top of it. |
+| **Trust the scanner verdict** | Whether the scanner's own overall verdict is honoured rather than re-derived. |
+| **Files examined per scan** | Assessment coverage. The behavioral analyzer makes one model call per file, so this trades coverage against wall clock. Exceeding it **warns and reports exactly what was left out** — it never fails the submission. |
+| **Severity roll-up** | Weights used to order the evaluations table. Never gates. |
+
+Invalid policy content is rejected with a specific error and creates no version — including a
+metric that disagrees with what the benchmark actually reports, which has caused a real bug here
+before.
+
+### Models
+
+The app speaks **OpenAI-compatible base URL + API key** and nothing else:
 
 ```
 GATEWAY_BASE_URL=http://gateway:4000/v1
 GATEWAY_API_KEY=sk-local
 ```
 
-Point those at a corporate LiteLLM instance, a local vLLM server, or `api.openai.com` and
-nothing else changes. A direct provider key is *supported*, never *assumed*.
+Point those at the bundled LiteLLM container, a corporate LiteLLM instance, a local vLLM
+server, or a provider directly. The app only ever sees **aliases**, so swapping the model behind
+one is a gateway change nothing else notices.
 
-One gateway drives all three compute engines. Models are configured in
-`gateway/litellm_config.yaml` as **aliases**, and the app only ever sees the alias — so
-swapping the model behind `judge` or behind a subject alias is a gateway change that the
-governance layer never notices. Two roles need filling:
+`gateway/litellm_config.yaml` ships as a **working example, not a recommendation** — a couple of
+small local models plus mock routes so a clean checkout runs. Replace it with your own. Two
+roles need filling: a **subject** (the model under evaluation) and a **judge** (which must
+follow a grading rubric on security content without refusing it).
 
-| Role | What it needs |
+**→ [docs/GATEWAY.md](docs/GATEWAY.md)** covers setup, onboarding a local Ollama model,
+onboarding an API-based model, the alias rule, and how to prove a route works before spending a
+run on it.
+
+### Environment
+
+| Variable | Purpose |
 |---|---|
-| **Subject** | The model under evaluation. Whatever you are deciding about. |
-| **Judge** | Grades open-ended answers for the three judged benchmarks. Needs to be capable enough to follow a grading rubric on security content, and it must not refuse it — a judge that will not grade silently corrupts scores, which is why its reliability is measured and can void a run. |
+| `GATEWAY_BASE_URL` | OpenAI-compatible endpoint |
+| `GATEWAY_API_KEY` | bearer token for the above |
+| `DEFAULT_SUBJECT_MODEL` | pre-selected model in the submit form. Deliberately local, so a mis-click cannot start a billed run |
+| `DEFAULT_JUDGE_MODEL` | grader for the judged benchmarks |
+| `SCANNER_MODEL` | analyzer the MCP/skill scanners use |
+| provider keys | read by the **gateway only**, never by the app. Which ones depends entirely on your gateway config |
 
-> **Alias rule:** no slashes or colons in an alias. Inspect parses model strings as
-> `openai-api/<provider>/<model>` and splits on `/`, so an upstream name of the common
-> `family:variant` form needs an alias like `family-variant`.
+The three model variables take **gateway aliases**, not provider-native model strings.
 
-Two safeguards keep the "no provider assumptions" claim true rather than aspirational:
+## What gets measured
 
-- The UI offers a **dropdown of gateway aliases**, never a free-text model field.
-- **Preflight runs a real completion for the subject and the judge** before any run starts, and
-  returns the upstream error body verbatim on failure. Judge routing is the usual breakage:
-  `inspect_evals` tasks default their graders to a hardcoded provider model, so the eval
-  subprocess is launched with every provider credential stripped and those defaults overridden.
+Seven benchmarks for AI models, one per risk dimension — chosen by dimension rather than
+reputation, with none counted twice:
 
-## Architecture
-
-```
-compose.yaml
-  gateway   :4001 → 4000   LiteLLM — the single OpenAI-compatible surface
-  backend   :8000          FastAPI + Inspect AI + both Cisco scanners
-  frontend  :3000          Next.js App Router
-  ollama    :11434         optional, profile: local-models
-```
-
-SQLite on a volume, alongside eval logs, scanner reports and per-run clone workspaces. DB access
-goes through SQLModel, so moving to Postgres is a connection-string change.
-
-The gateway is a separate image because `litellm[proxy]` requires `boto3>=1.43.1` while
-`inspect-ai` requires `aioboto3`, which caps it lower — they cannot share a virtualenv. The plain
-`litellm` library coexists fine, so the Cisco scanners live in the backend image alongside
-Inspect. `backend/tests/test_engine_coexistence.py` asserts this arrangement.
-
-### Safety of the tool itself
-
-A governance tool that could be compromised by the artifacts it inspects would be worse than no
-tool. Submitted code is **never executed**:
-
-- `git clone --depth 1`, hooks disabled, no submodules, no build step — read only.
-- Zip uploads stream with a size cap and reject traversal, symlinks and bombs.
-- Non-URL submissions must resolve inside an allowlisted directory.
-- `mcp-scanner`'s `stdio`/`remote` modes *launch* the server under test, so they are off by
-  default.
-
-## Testing
-
-```bash
-scripts/e2e.sh              # build, launch, verify every acceptance criterion, tear down
-scripts/e2e.sh --keep-up    # leave the stack running
-scripts/calibrate.sh        # measure detection against the vendor eval corpora
-cd backend && uv run pytest # pure-logic tests
-```
-
-Success criteria are written down as checkable gates in [ACCEPTANCE.md](ACCEPTANCE.md) and
-executed by `scripts/e2e.sh`. Four rules keep them honest:
-
-1. **End-to-end over unit.** Criteria are satisfied by real HTTP against a running stack, real
-   model calls, real subprocesses. Unit tests cover only pure logic where a round trip would
-   prove nothing extra.
-2. **No mocked model call backs a correctness claim.** The mock routes prove one thing: the stack
-   boots with zero keys.
-3. **Local models only.** A full run costs **$0**.
-4. **Judged paths are actually judged**, so judge misrouting can't hide behind a passing subject.
-
-`scripts/calibrate.sh` runs the whole pipeline over the labelled corpora the Cisco repos ship
-(141 malicious MCP servers across 14 threat categories; 17 malicious and 4 safe skills) and
-reports recall, plus a false-positive rate with its denominator attached.
-
-## Configuration
-
-| Variable | Default | Purpose |
+| Benchmark | Dimension it covers | Why it is in the set |
 |---|---|---|
-| `GATEWAY_BASE_URL` | `http://gateway:4000/v1` | OpenAI-compatible endpoint |
-| `GATEWAY_API_KEY` | `sk-local` | bearer token for the above |
-| `DEFAULT_SUBJECT_MODEL` | a local alias | pre-selected model in the submit form. Deliberately a local one, so a mis-click cannot start a billed run |
-| `DEFAULT_JUDGE_MODEL` | a local alias | grader for the judged benchmarks |
-| `SCANNER_MODEL` | a local alias | analyzer the MCP/skill scanners use |
-| provider keys | — | read by the **gateway only**, never by the app. Which ones depends entirely on your gateway config |
+| `cyse4_mitre` | Direct misuse | Will it help an attacker who simply asks? The baseline question. |
+| `cyse4_mitre_frr` | Over-refusal | Its mandatory pair — without it a model passes the above by refusing everything, which is useless to a security team. |
+| `strong_reject` | Jailbreak robustness | The only gate where the **attacker is the user**. 37 attack transformations, and a grader that scores refusal, convincingness and specificity separately so empty compliance is not mistaken for a jailbreak. |
+| `cyse4_instruct` | Insecure code | The everyday risk: models write production code. Deterministic semgrep detection, no judge. |
+| `cyse4_multilingual_prompt_injection` | Injection via content | Untrusted text overriding instructions, across languages — a common filter bypass. |
+| `agentdojo` | Injection via tools | Untrusted **tool output** redirecting an agent mid-task, over 629 security cases in realistic environments. |
+| `atb_memory_poison` | Memory poisoning | OWASP ASI06: an injection planted in one task that pays off in a later, unrelated one — the only dimension where attack and effect are separated in time. |
 
-The three model variables take **gateway aliases**, not provider-native model strings. Their
-shipped defaults point at the example config's local models so a fresh checkout costs nothing;
-set them to whatever your own gateway serves.
+One caveat worth stating plainly: `agentdojo` and `atb_memory_poison` score security from
+tool-call behaviour, so **a model too weak to call tools reliably scores well by failing to
+act.** Both record an ungated utility metric beside the security one for exactly this reason —
+read them together, or the number flatters incompetence. (We measured this: one
+AgentThreatBench task produced *no score at all* on a small local model because it emitted a
+malformed tool call.)
 
-Governance policies are **versioned documents in the database**, one per asset class, edited
-from the Policies page (or `POST /api/policies/{class}/versions`). Every edit creates a new
-immutable version; the newest version governs new runs, and each run records the version and
-content hash that governed it — so editing a threshold never silently rewrites the meaning of a
-past decision. The YAML files under `backend/policy/` only seed an empty database.
+Sample counts, thresholds and which benchmarks are in the suite all come from the policy.
 
-Each LLM gate also sets how many samples run — either `samples: N` (the dataset's first N) or a
-pinned `sample_ids:` **core set**: a stratified, seeded selection proposed from a benchmark's
-page and adopted as a policy edit, so every run measures exactly the same test cases.
+**→ [docs/BENCHMARKS.md](docs/BENCHMARKS.md)** for why each one earns its place, measured
+per-benchmark cost, what was assessed and deliberately left out, the Docker sandbox tier, and
+the one category excluded on safety grounds.
 
-Policies are edited entirely through **forms** — thresholds, sample counts, which benchmarks
-are in the suite, the judge, and the scanner severity rules. There is no YAML surface in the
-UI: the document stays the stored, hashed, versioned artifact, but nobody has to hand-indent
-it to change a threshold. Ticking a benchmark in or out of the suite is a checkbox; its metric
-and direction come from the benchmark registry and are never editable, because they are facts
-about the benchmark rather than preferences. **Only benchmarks in the suite run** — one
-registered but not enabled is available to add and never silently consumes compute.
+For **MCP servers and agent skills** there is no benchmark: no published benchmark can score an
+artifact someone submits, so the scanner is the evaluation and the gate is a severity rule.
+Finding counts track how much code there is rather than how dangerous it is, which is why a
+0–100 score over them would be invented precision.
 
 ### Choosing which severities block
 
@@ -280,171 +185,36 @@ curl -s localhost:8000/api/stats/severity   # findings by analyzer and severity,
 
 A severity belongs in `block_on` when its presence genuinely distinguishes submissions. If it
 fires on nearly everything it is not discriminating, and blocking on it means every asset
-requires review regardless of merit — which is the same as having no rule. This distribution is
-the evidence for that decision, and changing it is a policy edit.
+requires review regardless of merit — the same as having no rule.
 
-Note that `mcp-scanner` has no CRITICAL severity — HIGH is the top of its scale and is what
+Note that `mcp-scanner` has no CRITICAL severity: HIGH is the top of its scale and is what
 actually blocks there. `skill-scanner` does emit CRITICAL.
 
-## Security testing of this tool
+## Testing
 
-A tool that evaluates the security of other people's code should be able to show its own
-results. Everything below was run against this repository.
+```bash
+cd backend && uv run pytest      # pure-logic invariants
+scripts/e2e.sh                   # builds, launches, verifies against a running stack
+```
 
-### Code review
+The end-to-end suite makes **real** model calls through the gateway to local models, so a full
+run costs nothing. Success criteria are written down as checkable gates in
+[docs/ACCEPTANCE.md](docs/ACCEPTANCE.md).
 
-Two passes were run. A focused review first, then a multi-agent scan at high effort with an
-adversarial verification panel — which found that one of the first pass's *fixes* was itself
-broken.
+**→ [docs/SECURITY_TESTING.md](docs/SECURITY_TESTING.md)** — this tool reviewed with Claude
+Code's `security-review` skill and the `claude-security` multi-agent plugin, including the
+findings, the detection-calibration numbers, and what that evidence does *not* establish.
 
-#### Second pass: multi-agent scan
+## Safety of the tool itself
 
-**Eight findings survived verification: four HIGH, three MEDIUM, one LOW.** The ones worth
-knowing about:
+A governance tool that could be compromised by the artifacts it inspects would be worse than no
+tool. Submitted code is **never executed**:
 
-- **`--recurse-submodules=no` did the opposite of its intent** (HIGH). git documents the flag as
-  `--[no-]recurse-submodules[=<pathspec>]`, so the `=` form takes a *pathspec* — passing `=no`
-  **enabled** submodule cloning and matched submodules at path `no`. A submitted repo could then
-  have an arbitrary URL fetched from `.gitmodules`, bypassing the four-forge allowlist entirely.
-  The regression test that should have caught this asserted the flag *string* appeared in the
-  source, which is exactly why it passed while the flag misbehaved. It now asserts the quoted
-  argv token and that the pathspec form is absent.
-
-- **Scanner output parsing could be manipulated by the submission** (HIGH). Both `_extract_json`
-  implementations counted braces without honouring JSON string quoting, and both scanners echo
-  submission-controlled text into their reports — a filename for the MCP path, a source line for
-  the skill path. A `}` inside that text ended the object early, so a submission could reduce or
-  void its own findings while the run recorded as a clean success. Replaced with `raw_decode`,
-  which is string-aware.
-
-- **pip-audit could be pointed at a project rather than a requirements file** (contested). A
-  submission can contain a *directory* named `requirements.txt`, or a `pyproject.toml`, either of
-  which selects pip-audit's project mode — resolving and installing declared dependencies, i.e.
-  running a build backend on attacker input. Two verifiers rated it exploitable, one refuted it on
-  an argparse detail. The missing type check was certain either way, so the input is now narrowed
-  to regular `requirements.txt` files only. Writing the test for this exposed that the first fix
-  was incomplete: skipping the directory still left a real `pyproject.toml` *inside* it reachable.
-
-- **The gateway image baked a default bearer token** while compose published every service on all
-  interfaces. The default is gone and all published ports are now bound to `127.0.0.1`, which is
-  where a single-user local tool with no authentication belongs.
-
-On the two fixes the scan was explicitly asked to attack rather than accept: **the SSRF pinning
-held and the symlink containment held**, three verifiers each. But the SSRF rewrite had *narrowed*
-its own predicate — moving to `is_global` silently dropped the `is_multicast` and `is_reserved`
-checks the previous version had, and admitted NAT64. No route existed (the compose network is
-IPv4-only, and the https-only rule blocks the plain-HTTP internal services), but a fix should not
-quietly reduce coverage, so those predicates are restored and NAT64 prefixes are now denied
-explicitly.
-
-#### First pass: focused review
-
-Found **two MEDIUM issues, both real, both since fixed** with regression tests. Both were containment failures rather than crashes, which is the
-class that matters here: this tool deliberately clones untrusted repositories and unzips
-untrusted archives, so the property under test is that a submission cannot reach beyond itself.
-
-**1. Symlink escape from a cloned repository.** `git clone` checked out symlinks, and the scan
-path then followed them: the file walk used `is_file()` (which follows a link) with the suffix
-taken from the *link* name, and the bounded-scan staging step used `shutil.copy2`, which
-dereferences by default. That last step copied the target's bytes into a fresh scan root as an
-ordinary file — laundering external content past `mcp-scanner`'s own symlink guard, which only
-rejects things still shaped like symlinks. Reproduced with a submission of 41 filler files plus
-`0leak.py -> outside.env`; the linked file's contents landed in the run workspace. Fixed with
-`-c core.symlinks=false` on clone, symlink and resolve-inside-root checks in the walk, and
-`follow_symlinks=False` when staging. The zip path already refused symlink members; the clone
-path is now consistent with it.
-
-**2. SSRF guard weaknesses.** Two separate problems. The guard resolved the hostname and checked
-every address, then handed the URL *string* to the HTTP client, which resolved again — two
-lookups, so a name whose records changed in between was fetched having never been validated. And
-the address filter (`is_private`, `is_loopback`, `is_link_local`, …) is not equivalent to
-"globally routable": `100.64.0.1` in carrier-grade NAT space passed. Fixed by connecting to the
-validated literal address with `Host` and SNI preserved, and by checking `is_global` plus an
-explicit deny for `192.88.99.0/24` and `2002::/16` — the 6to4 relay prefixes, which report
-`is_global == True`.
-
-One further item was fixed as hardening rather than a finding: the scanner subprocesses received
-the whole environment while eval subprocesses were scrubbed. No egress path existed (the backend
-container is never given provider keys), but the asymmetry is how a leak appears after a config
-change.
-
-### Checked and cleared
-
-Recorded because what was examined and found safe is as informative as what was flagged:
-
-- **Zip-slip and zip symlink members** — absolute paths and any `..` component rejected before
-  extraction; symlink members refused outright.
-- **Submission-path allowlist** — `realpath` applied before a component-wise ancestor test, so
-  `…/uploads-evil` and `…/uploads/../../etc/passwd` both fail, as do case-variant paths.
-- **Upload filename handling** — the write path comes from a server-side counter; the client
-  filename is used only for the extension check.
-- **Command and argument injection** — all five subprocess call sites use argument lists, never a
-  shell. Submission-derived paths are absolute and server-rooted, and model aliases are wrapped
-  into `openai-api/gateway/<alias>`, so neither can be parsed as a flag.
-- **SSRF via IP encodings** — decimal, octal, short-form and IPv4-mapped IPv6 forms are
-  normalised by resolution before the check and blocked. NAT64 prefixes are denied explicitly
-  rather than by normalisation, which an earlier version of this list described incorrectly.
-- **Redirect handling** — redirects are followed manually with each hop re-validated, so an
-  allowed host cannot bounce the fetch to a forbidden one.
-- **`hf_repo_id` interpolation** — reaches only the path of a URL whose scheme and host are
-  fixed literals; no payload moves the request off the host.
-- **Credentials in responses** — no path was found by which a provider key reaches a response
-  body, a log line, or an artifact.
-- **Gate-logic bypass** — the gate reads only gated scores, compares raw values against raw
-  thresholds, treats a missing score or unreliable judge or failed scan as blocking, and never
-  reads the composite.
-- **Executing submitted code** — the dependency audit runs with `--no-deps --disable-pip` on a
-  requirements *file*, so no build backend runs; clones use `--recurse-submodules=no` and
-  `core.hooksPath=/dev/null`. Nothing from a submission executes.
-- **Frontend XSS** — no `dangerouslySetInnerHTML`, `innerHTML`, `srcdoc`, `eval` or
-  `new Function` anywhere; scanner findings render as React text children.
-
-### Detection calibration
-
-`scripts/calibrate.sh` runs the pipeline over the labelled corpora the Cisco scanner repos ship
-and scores it against their ground truth. Analyzer model `gemma4` running locally, policy v1,
-**$0 spend**:
-
-| Corpus | Malicious | Detected | Recall | Benign | Flagged | FP rate |
-|---|---|---|---|---|---|---|
-| MCP servers | 14 | 12 | **86%** | 2 | 1 | **50%** ⚠️ |
-| Agent skills | 17 | 15 | **88%** | 4 | 0 | **0%** |
-
-Missed: `injection-attacks`, `template-injection` (MCP); `sql-injection`,
-`test_skills-malicious` (skills). All four produced zero findings rather than findings we
-mis-scored. The EICAR miss is explainable — it is an antivirus test file, and the VirusTotal
-analyzer is off by default.
-
-**The most useful result is the worst one.** A legitimate benign MCP server
-(`evals/remote/benign/GitHub_tools`) was flagged HIGH — 1 of the 2 benign MCP servers that
-produced a result. That is direct evidence the MCP severity rule is not yet well calibrated —
-one benign server in four being flagged is a high false-positive rate. The skill rule looks
-better: all four safe
-skills produced zero findings.
-
-A third benign MCP server (`azure_tools`) **timed out at 900s**, which is the scan-time
-limitation below, measured rather than asserted.
-
-The skill corpus was run twice, independently, and produced **identical per-case outcomes** —
-same 15 detections, same 2 misses. Worth checking rather than assuming, because the LLM analyzer
-is a model and the judge-refusal rate elsewhere in this project does vary run to run. Both
-reports are committed under `data/calibration/`.
-
-### What this does not establish
-
-- **The scan did not finish cleanly.** A session limit killed 12 of 34 researchers mid-run; only
-  the two areas named above were re-run. `backend/app/scoring/`, `gateway/` and the deploy
-  configuration were never audited, and **no secrets sweep ran** — nothing here verifies that no
-  credential is committed anywhere. Sixteen further candidate sites fell below the verification
-  cap and are recorded as open questions rather than findings.
-- Conclusively cleared, for what it is worth: the startup DDL in `db.py` (all interpolants are
-  compile-time constants from `models.py`), and frontend XSS (every submission-derived string
-  lands as an escaped JSX text child, no raw-HTML sink anywhere).
-- Recall is measured on one sample per MCP threat category, not all 141 servers.
-- The false-positive denominators are 2 and 4. Enough to show the skill rule discriminates and
-  that the MCP rule does not yet; nowhere near enough to call either rule calibrated.
-- The corpora are the scanner vendor's own, so they are likely favourable to their detections.
-- No third-party penetration test.
+- `git clone --depth 1`, hooks disabled, no submodules, no build step — read only.
+- Zip uploads stream with a size cap and reject traversal, symlinks and bombs.
+- Non-URL submissions must resolve inside an allowlisted directory.
+- `mcp-scanner`'s `stdio`/`remote` modes *launch* the server under test, so they are off by
+  default.
 
 ## Known limitations
 
@@ -508,6 +278,18 @@ Ideas, roughly in order of value:
 - **Postgres + Alembic** for multi-user deployments.
 - **CI workflow** running the pure-logic suite on every push.
 - **Export a decision record** (PDF or signed JSON) for attaching to a ticket.
+
+## Documentation
+
+| Document | What is in it |
+|---|---|
+| [docs/GATEWAY.md](docs/GATEWAY.md) | Gateway setup, onboarding a local or API-based model, the alias rule |
+| [docs/BENCHMARKS.md](docs/BENCHMARKS.md) | Why each benchmark earns its place, measured cost, what was excluded and why |
+| [docs/SECURITY_TESTING.md](docs/SECURITY_TESTING.md) | This tool reviewed with Claude Code's `security-review` skill and the `claude-security` plugin |
+| [docs/ACCEPTANCE.md](docs/ACCEPTANCE.md) | Checkable success criteria per phase, executed by `scripts/e2e.sh` |
+| [docs/LIMITS_AUDIT.md](docs/LIMITS_AUDIT.md) | Every cap, timeout and truncation, classified by what happens when it bites |
+| [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) | The build plan and what each phase actually established |
+| [docs/research/](docs/research/) | Benchmark landscape research the suite was chosen from |
 
 ## Contributing
 

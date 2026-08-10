@@ -51,7 +51,7 @@ criteria is the signal to move to the next phase without review.
 5. **A run that cannot be scored is never an approval.** Missing scores, unreliable judges,
    and scanner errors all resolve to `NEEDS_DEEP_TESTING` or `ERROR`, never `AUTO_APPROVE`.
 
-Per-phase criteria are enumerated in [ACCEPTANCE.md](../ACCEPTANCE.md) and executed by
+Per-phase criteria are enumerated in [ACCEPTANCE.md](ACCEPTANCE.md) and executed by
 [scripts/e2e.sh](../scripts/e2e.sh). Each phase is committed once its criteria are green.
 
 ### Known constraint on Phase 5

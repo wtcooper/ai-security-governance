@@ -32,7 +32,9 @@ review never ran to completion (the agent was killed by the session limit). Prot
 that a patch needs both the verifier and a fresh reviewer of the bare diff; F4 has only the
 first, so applying it would overstate its assurance.
 
-- Diff: `<PATCH DIR>/F4.diff`
+- Diff: `<PATCH DIR>/F4.diff` — the only diff still on disk. F1's and F5's were deleted once
+  applied; F5's in particular was the *rejected* attempt, which still carried the `seed_policies`
+  defect, so it did not match what was committed and was a trap to leave lying around.
 - Verifier result: PASS, all three claims CONFIDENT, `untested: false`, 251 tests pass
   (246 base + 5 new), and the 5 new tests fail against the unmodified file.
 - What it does: wraps the fetched page in a per-request unguessable fence

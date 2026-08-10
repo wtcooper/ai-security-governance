@@ -45,14 +45,19 @@ services:
     build: ./backend
     ports:
       - "127.0.0.1:8000:8000"
+    # Every value here comes from the root .env, with the bundled-gateway defaults inline.
+    # The app reads no other configuration, so .env is the single place to change any of it.
     environment:
-      GATEWAY_BASE_URL: http://gateway:4000/v1
+      # Defaults to the bundled gateway. Point this at a corporate LiteLLM (or any
+      # OpenAI-compatible endpoint) from .env — see "Using your own gateway" in the README.
+      GATEWAY_BASE_URL: ${GATEWAY_BASE_URL:-http://gateway:4000/v1}
       GATEWAY_API_KEY: ${GATEWAY_API_KEY:-sk-local}
-      # Default judge is a LOCAL Ollama model so development and the whole end-to-end
-      # test suite cost nothing. gpt-5.6-luna is the intended judge for real calibration
-      # runs (Phase 5) — set DEFAULT_JUDGE_MODEL in .env when you want it, and note that
-      # it currently needs credits added to the OpenAI account.
+      # The three model settings take gateway ALIASES, not provider-native model strings.
+      # Defaults are local Ollama models so development and the whole end-to-end test suite
+      # cost nothing; a corporate gateway will not have these aliases, so set all three.
+      DEFAULT_SUBJECT_MODEL: ${DEFAULT_SUBJECT_MODEL:-gemma4}
       DEFAULT_JUDGE_MODEL: ${DEFAULT_JUDGE_MODEL:-qwen35}
+      SCANNER_MODEL: ${SCANNER_MODEL:-gemma4}
       APP_DATA_DIR: /srv/data
     volumes:
       # SQLite DB, eval logs, scanner reports, per-run clone workspaces.

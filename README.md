@@ -66,7 +66,7 @@ Three services, each independently buildable so an organisation can take any one
 |---|---|
 | **frontend** | Next.js. Submit an asset, read decisions, edit policy. |
 | **backend** | FastAPI. Runs the benchmarks (Inspect AI) and the scanners, evaluates the policy, records decisions in SQLite. |
-| **gateway** | LiteLLM. The single OpenAI-compatible endpoint every compute engine talks to. Separate container by necessity — see [the gateway doc](docs/GATEWAY.md#why-the-gateway-is-a-separate-container). |
+| **gateway** | LiteLLM. The single OpenAI-compatible endpoint every compute engine talks to. Separate container by necessity — see [the gateway doc](docs/GATEWAY.md#why-the-gateway-is-a-separate-container). Skip it entirely if you already have one — see [Using your own gateway](#using-your-own-gateway). |
 
 Benchmarks run in a **subprocess with every provider credential stripped**, so a task whose
 grader defaults to a hardcoded provider model fails loudly instead of silently billing someone.
@@ -131,16 +131,54 @@ follow a grading rubric on security content without refusing it).
 onboarding an API-based model, the alias rule, and how to prove a route works before spending a
 run on it.
 
+### Using your own gateway
+
+If you already have a LiteLLM instance (or any OpenAI-compatible endpoint), run the frontend
+and backend locally and point them at it. Put the URL, the token and the three model aliases
+in `.env`:
+
+```bash
+GATEWAY_BASE_URL=https://litellm.your-company.com/v1
+GATEWAY_API_KEY=sk-...            # your gateway's key
+DEFAULT_SUBJECT_MODEL=<alias>     # aliases as your gateway names them —
+DEFAULT_JUDGE_MODEL=<alias>       # the bundled defaults do not exist there
+SCANNER_MODEL=<alias>
+```
+
+Then start with the external-gateway overlay, which skips the bundled LiteLLM container:
+
+```bash
+docker compose -f compose.yaml -f compose.external-gateway.yaml up --build
+```
+
+Four things worth knowing:
+
+- **The URL needs its `/v1` suffix**, and from inside Docker a gateway on your own machine is
+  `http://host.docker.internal:4000/v1` — `localhost` there means the container.
+- **The submit form lists whatever your gateway returns from `/v1/models`**, so you do not
+  register aliases anywhere in this app. The three settings above only choose the defaults.
+- **No provider keys are needed in `.env`.** They belong to your gateway. `OPENAI_API_KEY` and
+  friends are read by the bundled container only, which is no longer running.
+- **The header's gateway light polls `/health/readiness`** on the same host. LiteLLM serves it;
+  a bare vLLM or provider endpoint may not, so the light can read unreachable while runs work
+  fine. What actually protects a run is the preflight — a real completion against the chosen
+  model before any evaluation starts.
+
 ### Environment
+
+Every setting lives in the root `.env`. Docker Compose reads that file automatically and
+passes these through to the backend container; the app reads no other configuration file.
+`env.example` documents all of them.
 
 | Variable | Purpose |
 |---|---|
-| `GATEWAY_BASE_URL` | OpenAI-compatible endpoint |
+| `GATEWAY_BASE_URL` | OpenAI-compatible endpoint. Defaults to the bundled gateway |
 | `GATEWAY_API_KEY` | bearer token for the above |
 | `DEFAULT_SUBJECT_MODEL` | pre-selected model in the submit form. Deliberately local, so a mis-click cannot start a billed run |
 | `DEFAULT_JUDGE_MODEL` | grader for the judged benchmarks |
-| `SCANNER_MODEL` | analyzer the MCP/skill scanners use |
-| provider keys | read by the **gateway only**, never by the app. Which ones depends entirely on your gateway config |
+| `SCANNER_MODEL` | analyzer the MCP/skill scanners use, one call per source file |
+| `OLLAMA_API_BASE` | where the **bundled** gateway finds local models |
+| provider keys | read by the **bundled gateway only**, never by the app. Which ones depends entirely on your gateway config |
 
 The three model variables take **gateway aliases**, not provider-native model strings.
 

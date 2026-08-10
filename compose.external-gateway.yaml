@@ -1,0 +1,21 @@
+# Overlay for running against a gateway you already have — a corporate LiteLLM instance, a
+# vLLM server, or a provider endpoint directly. Frontend and backend still run locally in
+# Docker; only the bundled LiteLLM container drops out.
+#
+#   docker compose -f compose.yaml -f compose.external-gateway.yaml up --build
+#
+# Set GATEWAY_BASE_URL, GATEWAY_API_KEY and the three model aliases in .env first. Without
+# this overlay the bundled gateway would still be built and waited on, which is wasted time
+# when nothing routes through it.
+
+services:
+  # Assigning a profile no command enables is what keeps the service defined but unstarted;
+  # Compose has no way to delete a service from an overlay.
+  gateway:
+    profiles: ["bundled-gateway-disabled"]
+
+  backend:
+    # The health gate refers to the container above, which is no longer starting. Gateway
+    # reachability is still checked — by the app, against whatever URL you configured, and
+    # reported in the header. A run also preflights a real completion before it starts.
+    depends_on: !reset null

@@ -37,7 +37,7 @@ These exist to stop a hostile submission consuming the host, and they all fail c
 |---|---|---|
 | `MAX_ARCHIVE_BYTES` | 100 MB compressed | upload rejected |
 | `MAX_UNCOMPRESSED_BYTES` | 500 MB expanded | rejected — zip-bomb guard, checked before extraction |
-| `MAX_MEMBERS` | 20,000 entries | rejected |
+| `MAX_MEMBERS` | 200,000 entries | rejected — memory guard on listing, raised from 20,000 (see above) |
 | `MAX_REDIRECTS` (published-score fetch) | 3 | error — each hop re-validated against the SSRF guard |
 | `MAX_BYTES` (published-score fetch) | 5 MB | response truncated; it is parsed for candidate scores a human then confirms |
 | Single-root strip depth | 8 levels | stops descending; pathological nesting cannot loop |

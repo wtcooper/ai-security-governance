@@ -39,7 +39,8 @@ so a governance run is repeatable and costs a bounded, visible number of model c
 
 ## Quick start
 
-Requires Docker. On macOS, [Colima](https://github.com/abiosoft/colima) works well:
+Requires Docker with Compose **v2.20.2 or newer** (`docker compose version`). On macOS,
+[Colima](https://github.com/abiosoft/colima) works well:
 
 ```bash
 brew install colima docker docker-compose

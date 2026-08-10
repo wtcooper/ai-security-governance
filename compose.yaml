@@ -65,6 +65,10 @@ services:
     depends_on:
       gateway:
         condition: service_healthy
+        # `required: false` is what lets the external-gateway overlay switch the bundled
+        # gateway off without this becoming "depends on undefined service gateway". When the
+        # gateway IS running, startup still blocks until it is healthy.
+        required: false
 
   frontend:
     build: ./frontend

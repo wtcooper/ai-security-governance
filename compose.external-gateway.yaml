@@ -10,12 +10,7 @@
 
 services:
   # Assigning a profile no command enables is what keeps the service defined but unstarted;
-  # Compose has no way to delete a service from an overlay.
+  # Compose has no way to delete a service from an overlay. The backend's dependency on it
+  # is declared `required: false` in the base file, so nothing errors when it stays down.
   gateway:
     profiles: ["bundled-gateway-disabled"]
-
-  backend:
-    # The health gate refers to the container above, which is no longer starting. Gateway
-    # reachability is still checked — by the app, against whatever URL you configured, and
-    # reported in the header. A run also preflights a real completion before it starts.
-    depends_on: !reset null

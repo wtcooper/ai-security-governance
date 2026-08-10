@@ -16,6 +16,7 @@ import importlib
 import sqlite3
 
 NEW_COLUMNS = ("judge_unresolved_rate", "judge_refusal_rate")
+UNIQUE_INDEX = "uq_policy_version_asset_type_version"
 
 
 def _reloaded_db(tmp_path, monkeypatch):
@@ -83,6 +84,94 @@ def test_reconciliation_is_idempotent(tmp_path, monkeypatch):
     connection.close()
 
     assert len(names) == len(set(names)), "a column was added twice"
+
+    from app import config
+
+    config.get_settings.cache_clear()
+
+
+def _insert_policy_row(connection, version: int) -> None:
+    connection.execute(
+        "INSERT INTO policy_version (asset_type, version, content, content_hash, created_at) "
+        "VALUES ('LLM', ?, 'gates: {}', 'hash', '2026-01-01T00:00:00')",
+        (version,),
+    )
+
+
+def _index_names(connection) -> set[str]:
+    return {row[1] for row in connection.execute("PRAGMA index_list(policy_version)")}
+
+
+def test_a_unique_index_the_models_declare_is_added_to_an_existing_database(
+    tmp_path, monkeypatch
+):
+    """`create_all` skips an existing table, indexes included, so the rule needs adding.
+
+    The databases written before (asset_type, version) was unique are exactly the ones that
+    can accumulate two rows claiming the same policy version.
+    """
+    import pytest
+
+    db_path = tmp_path / "governance.db"
+    db = _reloaded_db(tmp_path, monkeypatch)
+    db.init_db()
+
+    # A database as a version before the constraint would have left it.
+    connection = sqlite3.connect(db_path)
+    connection.execute(f"DROP INDEX {UNIQUE_INDEX}")
+    _insert_policy_row(connection, 1)
+    connection.commit()
+    connection.close()
+
+    db.init_db()
+
+    connection = sqlite3.connect(db_path)
+    try:
+        assert UNIQUE_INDEX in _index_names(connection)
+        with pytest.raises(sqlite3.IntegrityError):
+            _insert_policy_row(connection, 1)
+    finally:
+        connection.close()
+
+    from app import config
+
+    config.get_settings.cache_clear()
+
+
+def test_rows_that_already_violate_a_unique_index_do_not_stop_startup(
+    tmp_path, monkeypatch, caplog
+):
+    """Startup must never become the thing that takes the application down.
+
+    `init_db` runs on every start, so raising here would turn rows written while nothing
+    enforced uniqueness into a boot failure that repeats forever and needs hand-written SQL
+    against the file in the volume. Such a database keeps behaving exactly as it did before
+    the constraint existed — and says, loudly, what a human has to decide.
+    """
+    import logging
+
+    db_path = tmp_path / "governance.db"
+    db = _reloaded_db(tmp_path, monkeypatch)
+    db.init_db()
+
+    connection = sqlite3.connect(db_path)
+    connection.execute(f"DROP INDEX {UNIQUE_INDEX}")
+    _insert_policy_row(connection, 1)
+    _insert_policy_row(connection, 1)  # the duplicate the constraint would have refused
+    connection.commit()
+    connection.close()
+
+    with caplog.at_level(logging.ERROR, logger="app.db"):
+        db.init_db()  # must not raise
+
+    connection = sqlite3.connect(db_path)
+    names = _index_names(connection)
+    versions = [row[0] for row in connection.execute("SELECT version FROM policy_version")]
+    connection.close()
+
+    assert UNIQUE_INDEX not in names, "no index can span rows that violate it"
+    assert versions == [1, 1], "the duplicates are the owner's to resolve, not ours to delete"
+    assert "policy_version" in caplog.text and "asset_type, version" in caplog.text
 
     from app import config
 

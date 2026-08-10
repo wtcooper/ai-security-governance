@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from app.engines.registry import CHECKS_BY_ID
@@ -385,27 +386,46 @@ def load_policy_dir(policy_dir: Path) -> Policy:
 
 # --- database mode ------------------------------------------------------------------------
 
+# A version number is chosen by reading the newest row, so two writers can choose the same
+# one. The unique index on (asset_type, version) makes that a rejected insert instead of two
+# rows claiming the same version, and the loser re-reads and takes the next free number. The
+# retry is bounded: each pass costs one read and one insert, and it only repeats while another
+# writer keeps winning the same instant.
+_VERSION_INSERT_ATTEMPTS = 5
+
 
 def seed_policies(session: Session, policy_dir: Path) -> None:
     """Insert version 1 for any asset class that has no policy rows yet."""
-    for asset_type in AssetType:
-        existing = session.exec(
-            select(PolicyVersion).where(PolicyVersion.asset_type == asset_type).limit(1)
-        ).first()
-        if existing is not None:
-            continue
-        text = seed_path(policy_dir, asset_type).read_text()
-        validate_class_content(asset_type, text)
-        session.add(
-            PolicyVersion(
-                asset_type=asset_type,
-                version=1,
-                content=text,
-                content_hash=content_hash(text),
-                note="seeded from backend/policy/",
-            )
-        )
-    session.commit()
+    for attempt in range(1, _VERSION_INSERT_ATTEMPTS + 1):
+        # The read below autoflushes the previous class's pending insert, so it can raise the
+        # very IntegrityError this retries — it has to sit inside the try, not just the commit.
+        try:
+            for asset_type in AssetType:
+                existing = session.exec(
+                    select(PolicyVersion).where(PolicyVersion.asset_type == asset_type).limit(1)
+                ).first()
+                if existing is not None:
+                    continue
+                text = seed_path(policy_dir, asset_type).read_text()
+                validate_class_content(asset_type, text)
+                session.add(
+                    PolicyVersion(
+                        asset_type=asset_type,
+                        version=1,
+                        content=text,
+                        content_hash=content_hash(text),
+                        note="seeded from backend/policy/",
+                    )
+                )
+            session.commit()
+            return
+        except IntegrityError:
+            # Another process seeded the same class between the read and the insert. Its row
+            # is exactly what this wanted, so re-read and fill in whatever is still missing —
+            # this runs at startup, and a lost race must not stop the application coming up.
+            session.rollback()
+            if attempt == _VERSION_INSERT_ATTEMPTS:
+                raise
 
 
 def newest_version(session: Session, asset_type: AssetType) -> PolicyVersion | None:
@@ -438,8 +458,29 @@ def get_version(session: Session, asset_type: AssetType, version: int) -> Policy
 def create_version(
     session: Session, asset_type: AssetType, content: str, note: str | None = None
 ) -> PolicyVersion:
-    """Validate and store a new immutable version. The newest version governs new runs."""
+    """Validate and store a new immutable version. The newest version governs new runs.
+
+    Reading the newest version and inserting the next number is a race two concurrent saves
+    can both win, which used to leave two different documents recorded as the same version —
+    a run pointing at that version could then no longer be resolved to one document. The
+    unique index rejects the second insert instead; this re-reads and takes the next free
+    number, so both edits are kept and the sequence stays a sequence.
+    """
     validate_class_content(asset_type, content)
+    for _ in range(_VERSION_INSERT_ATTEMPTS - 1):
+        try:
+            return _insert_next_version(session, asset_type, content, note)
+        except IntegrityError:
+            # Another writer took that number. Re-read and go again.
+            session.rollback()
+    # Out of retries: the last attempt's failure is the caller's answer, not another loop.
+    return _insert_next_version(session, asset_type, content, note)
+
+
+def _insert_next_version(
+    session: Session, asset_type: AssetType, content: str, note: str | None
+) -> PolicyVersion:
+    """One read-then-insert attempt. Raises IntegrityError if the number was taken."""
     current = newest_version(session, asset_type)
     row = PolicyVersion(
         asset_type=asset_type,

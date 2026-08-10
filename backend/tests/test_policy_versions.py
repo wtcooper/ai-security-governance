@@ -122,6 +122,104 @@ def test_versions_are_per_class(session):
     assert policy_store.newest_version(session, AssetType.SKILL).version == 1
 
 
+# --- two saves at once --------------------------------------------------------------------
+
+
+def _edited(content: str, threshold: str) -> str:
+    edited = content.replace("threshold: 0.85", f"threshold: {threshold}")
+    assert edited != content, "the edit must actually change the document"
+    return edited
+
+
+def test_the_database_refuses_a_second_row_for_the_same_version(session):
+    """Uniqueness is the database's job: nothing above it can win every race."""
+    from sqlalchemy.exc import IntegrityError
+
+    from app.models import PolicyVersion
+
+    seed_policies(session, POLICY_DIR)
+    v1 = policy_store.newest_version(session, AssetType.LLM)
+    session.add(
+        PolicyVersion(
+            asset_type=AssetType.LLM,
+            version=v1.version,
+            content=v1.content,
+            content_hash=v1.content_hash,
+        )
+    )
+    with pytest.raises(IntegrityError):
+        session.commit()
+    session.rollback()
+
+
+def test_a_save_that_read_a_stale_newest_version_takes_the_next_free_number(
+    session, monkeypatch
+):
+    """The race, made deterministic: two saves compute the same n+1 from the same read.
+
+    One of them has to lose. Losing must mean taking the next free number — not overwriting
+    the winner, not raising at the user, and above all not a second row claiming version n+1,
+    which would leave a recorded run's (version, hash) pair resolving to two documents.
+    """
+    seed_policies(session, POLICY_DIR)
+    v1 = policy_store.newest_version(session, AssetType.LLM)
+    policy_store.create_version(session, AssetType.LLM, _edited(v1.content, "0.90"), "first")
+
+    # The second writer still holds the v1 it read before the save above landed.
+    real_newest = policy_store.newest_version
+    reads: list[AssetType] = []
+
+    def stale_first(session_, asset_type):
+        reads.append(asset_type)
+        return v1 if len(reads) == 1 else real_newest(session_, asset_type)
+
+    monkeypatch.setattr(policy_store, "newest_version", stale_first)
+    loser = policy_store.create_version(
+        session, AssetType.LLM, _edited(v1.content, "0.95"), "second"
+    )
+    monkeypatch.undo()
+
+    assert len(reads) == 2, "the losing save must re-read rather than give up"
+    assert loser.version == 3
+    versions = [row.version for row in policy_store.list_versions(session, AssetType.LLM)]
+    assert versions == [3, 2, 1]
+    # Both edits survive, each under its own version.
+    stored = {v: policy_store.get_version(session, AssetType.LLM, v).content for v in (2, 3)}
+    assert stored == {2: _edited(v1.content, "0.90"), 3: _edited(v1.content, "0.95")}
+
+
+def test_concurrent_saves_never_share_a_version_number(tmp_path):
+    """The same property under real contention, since that is how it actually happens."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'race.db'}", connect_args={"check_same_thread": False}
+    )
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as setup:
+        seed_policies(setup, POLICY_DIR)
+        base = policy_store.newest_version(setup, AssetType.LLM).content
+
+    # A save can only lose to a save that commits, so with N writers one of them retries at
+    # most N-1 times — under the retry budget, which is what keeps this test deterministic.
+    writers = 4
+
+    def save(index: int) -> int:
+        with Session(engine) as writer:
+            row = policy_store.create_version(
+                writer, AssetType.LLM, _edited(base, f"0.7{index}"), f"edit {index}"
+            )
+            return row.version
+
+    with ThreadPoolExecutor(max_workers=writers) as pool:
+        written = sorted(pool.map(save, range(writers)))
+
+    assert written == list(range(2, 2 + writers)), "every save got its own version number"
+    with Session(engine) as check:
+        stored = [row.version for row in policy_store.list_versions(check, AssetType.LLM)]
+    assert stored == sorted(range(1, writers + 2), reverse=True), "no duplicates, none lost"
+
+
 # --- validation: invalid content creates nothing ------------------------------------------
 
 

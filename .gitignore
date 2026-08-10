@@ -14,8 +14,11 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# Anchored to the repository root: these are Python build/packaging directories, and an
+# unanchored "lib/" also matched frontend/lib/, silently keeping the frontend's API client
+# out of version control.
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -229,6 +232,7 @@ data/
 node_modules/
 .next/
 next-env.d.ts
+*.tsbuildinfo
 
 # Playwright MCP scratch output
 .playwright-mcp/

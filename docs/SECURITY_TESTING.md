@@ -14,10 +14,77 @@ Both are Claude Code tooling, so this is genuinely dogfooding: the same assistan
 the code reviewed it, which is worth weighing when reading the results — see
 [what this does not establish](#what-this-does-not-establish).
 
-## Second pass: multi-agent scan (`claude-security` plugin)
+## Third pass: complete multi-agent scan (2026-08-10)
 
-Run after the focused review, at high effort across the whole repository. Reported second here
-because its most useful result was catching a defect in the *first* pass's remediation.
+Run again with the `claude-security` plugin, at high effort across the whole repository (117
+tracked files, up from 86 at the second pass below). Unlike that earlier run — which lost 12 of
+34 researchers to a session limit — every one of the 74 dispatched researchers returned this
+time, so this is the first pass with full coverage: all five top-level directories accounted for
+as scanned or explicitly skipped (vendored dependencies and caches only), no directory left out
+for lack of time.
+
+**Six findings survived verification: zero HIGH, four MEDIUM, two LOW.** Two are fixed, two are
+still open, and two could not be patched — status per finding below. Full detail, including the
+ones that didn't survive the panel, is in
+[`docs/security/2026-08-10-full-scan/CLAUDE-SECURITY-RESULTS.md`](security/2026-08-10-full-scan/CLAUDE-SECURITY-RESULTS.md).
+
+- ✅ **A published score's `source_url` rendered as a live link with no scheme allowlist**
+  (MEDIUM, 3/3 panel; plus a LOW open-redirect variant on the same sink, closed by the same fix).
+  A `javascript:` URI reaching this field executed in the app's origin when a reviewer clicked
+  "source". **Fixed:** an `httpUrl()` guard parses the value with the WHATWG `URL` parser and
+  emits an `href` only for `http:`/`https:`, rendering anything else as escaped text. Probed
+  against `javascript:`, `JavaScript:`, leading-whitespace, `java\tscript:`, `data:`, `vbscript:`
+  and NUL-prefixed variants. An independent reviewer of the diff alone found no new attack path.
+
+- ✅ **A TOCTOU race in policy version numbering** (LOW, 3/3 panel). `create_version` read the
+  highest version then inserted `current + 1` with no row lock and no unique constraint, so
+  concurrent writes could leave two rows claiming the same version. **Fixed:** a unique index on
+  `(asset_type, version)`, a startup pass that adds it to databases that already exist, and a
+  bounded retry so a race loser takes the next free number. An 8/16/32-thread stress produced
+  duplicates before the fix and none after.
+
+- ⬜ **The policy-versioning endpoint has no authentication** (MEDIUM, 2/3 panel). `POST
+  /api/policies/{asset_type}/versions` accepts writes from anything that can reach the backend —
+  no API key, no session, no CSRF token. `gates.py` trusts the newest policy version for every
+  future approve/deny decision, so this is a way to silently relax or disable the tool's own
+  governance thresholds. **Open — and this one needs a product decision, not a patch:** the app
+  has no authentication anywhere, and the browser client has no way to hold a credential, so any
+  mandatory token would break the shipped frontend. See "What this does not establish".
+
+- ⬜ **The benchmark-score extraction prompt concatenates fetched page text with no delimiting**
+  (MEDIUM, 3/3 panel). `POST /api/published-scores/extract` feeds a fetched page's raw text
+  straight into the LLM instruction prompt, so a page can embed hidden instructions that
+  fabricate a passing benchmark score for an inattentive reviewer to approve. **A fix is written
+  and passed independent verification (251 tests), but its adversarial review did not complete —
+  so it is deliberately not applied.** It is held at
+  `CLAUDE-SECURITY-20260810-151644/.claude-security-run/patch-20260810-170834/F4.diff`.
+
+- ⛔ **The MCP/skill upload endpoint accepts unauthenticated, non-preflighted requests from any
+  origin** (MEDIUM, 2/3 panel). `uploadArchive` posts `multipart/form-data` with no custom
+  headers, which browsers never preflight — any page the operator's browser visits while the
+  stack is up can silently trigger an upload-and-scan job on the local backend. **Could not be
+  patched at the time:** its file, `frontend/lib/api.ts`, was excluded from version control (see
+  below), so no patch could be built against the committed tree. That exclusion is now fixed, so
+  this finding is patchable from here on.
+
+### The scan also exposed a repository-integrity bug
+
+Not a vulnerability, but more immediately damaging than most of the above: the root `.gitignore`
+carried the stock Python packaging pattern `lib/`, **unanchored**, so it also matched
+`frontend/lib/`. That directory had **never been committed**, while 17 tracked frontend files
+import from it — a fresh clone produced a frontend that could not build. The pattern is now
+anchored to `/lib/` and `frontend/lib/api.ts` is tracked. It surfaced only because a patch
+attempt tried to edit a file that turned out not to exist in the repository.
+
+This run read every tracked file — tests and fixtures included, no `focus` filter applied — so it
+closes the second pass's "no secrets sweep ran" gap for the current tree, though no *dedicated*
+secrets category was named separately in this run's coverage record.
+
+## Second pass: multi-agent scan (`claude-security` plugin, 2026-08-08)
+
+Run after the focused review, at high effort across the whole repository. Reported here because
+its most useful result was catching a defect in the *first* pass's remediation. (Superseded for
+coverage purposes by the complete third pass above — this run is kept for the fixes it drove.)
 
 **Eight findings survived verification: four HIGH, three MEDIUM, one LOW.** The ones worth
 knowing about:
@@ -116,8 +183,10 @@ Recorded because what was examined and found safe is as informative as what was 
 - **Executing submitted code** — the dependency audit runs with `--no-deps --disable-pip` on a
   requirements *file*, so no build backend runs; clones use `--recurse-submodules=no` and
   `core.hooksPath=/dev/null`. Nothing from a submission executes.
-- **Frontend XSS** — no `dangerouslySetInnerHTML`, `innerHTML`, `srcdoc`, `eval` or
-  `new Function` anywhere; scanner findings render as React text children.
+- **Frontend XSS via raw-HTML sinks** — no `dangerouslySetInnerHTML`, `innerHTML`, `srcdoc`,
+  `eval` or `new Function` anywhere; scanner findings render as React text children. (A narrower
+  exception surfaced in the third pass: a backend-supplied URL rendered into a raw `<a href>` with
+  no scheme allowlist — see above.)
 
 ## Detection calibration
 
@@ -152,19 +221,42 @@ reports are committed under `data/calibration/`.
 
 ## What this does not establish
 
-- **The scan did not finish cleanly.** A session limit killed 12 of 34 researchers mid-run; only
-  the two areas named above were re-run. `backend/app/scoring/`, `gateway/` and the deploy
-  configuration were never audited, and **no secrets sweep ran** — nothing here verifies that no
-  credential is committed anywhere. Sixteen further candidate sites fell below the verification
-  cap and are recorded as open questions rather than findings.
+- **The second pass (2026-08-08) did not finish cleanly.** A session limit killed 12 of 34
+  researchers mid-run; only the two areas named above were re-run. `backend/app/scoring/`,
+  `gateway/` and the deploy configuration were never audited, and no secrets sweep ran. Sixteen
+  further candidate sites fell below the verification cap and were recorded as open questions
+  rather than findings. The third pass (2026-08-10) closed the coverage gap — all 74 researchers
+  returned and every top-level directory was accounted for — but its own 44 verified candidates
+  are a smaller pool than the second pass's 28; the two runs are not directly comparable in scope
+  covered per candidate.
+- **Four of the third pass's six findings are still open.** Two are fixed (the `source_url`
+  render sink and the policy-version race, both with regression tests). Of the rest: the
+  extraction-prompt fix is written and independently verified but its adversarial review was cut
+  short by a session limit, so it is deliberately **not** applied — a fix that has not survived
+  the full panel is not a fix this project will claim. The upload-CSRF finding was unpatchable
+  while its file sat outside version control. And the missing-authentication finding is a design
+  question: this is a single-user local tool with no auth anywhere and a browser client that
+  cannot hold a credential, so closing it properly means deciding what the deployment model
+  actually is — loopback-only-and-accept-it, a local token plus a client that can send it, or a
+  real session layer. That decision has not been made, and a patch would be pretending otherwise.
+- The third pass also ran at `high`, not `max`, so no adversarial red-team re-panel of marginal
+  findings occurred, and no dedicated secrets-category pass was named (though every file was read).
+- **The fixes were verified by agents, not by a human or a pen test.** Each applied fix was
+  reviewed by an independent verifier that ran the project's suite, and the `source_url` fix was
+  additionally challenged by a fresh reviewer given only the diff. That panel caught two real
+  defects in its own proposed fixes — an unhandled 500 on an unauthenticated endpoint, and a
+  fail-closed startup check that would have permanently bricked boot on any database holding
+  pre-existing duplicate rows. That is the process working, but it is still Claude Code checking
+  Claude Code.
 - Conclusively cleared, for what it is worth: the startup DDL in `db.py` (all interpolants are
-  compile-time constants from `models.py`), and frontend XSS (every submission-derived string
-  lands as an escaped JSX text child, no raw-HTML sink anywhere).
+  compile-time constants from `models.py`), and raw-HTML-sink XSS (every submission-derived
+  string lands as an escaped JSX text child, no raw-HTML sink anywhere) — but not the `href`-based
+  variant the third pass found; see above.
 - Recall is measured on one sample per MCP threat category, not all 141 servers.
 - The false-positive denominators are 2 and 4. Enough to show the skill rule discriminates and
   that the MCP rule does not yet; nowhere near enough to call either rule calibrated.
 - The corpora are the scanner vendor's own, so they are likely favourable to their detections.
-- **No third-party penetration test, and no human security reviewer.** Both passes were run by
-  Claude Code tooling against code Claude Code wrote. That is a real limitation of this evidence,
+- **No third-party penetration test, and no human security reviewer.** All three passes were run
+  by Claude Code tooling against code Claude Code wrote. That is a real limitation of this evidence,
   not a formality: a reviewer sharing the author's blind spots will share its misses. Treat these
   results as a floor, not a clearance.

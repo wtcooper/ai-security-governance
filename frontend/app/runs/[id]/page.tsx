@@ -98,6 +98,18 @@ function Verdict({ run }: { run: Run }) {
   );
 }
 
+// Backend-supplied URLs are only safe in an href when they are http(s). Anything
+// else (javascript:, data:, vbscript:, ...) is returned as null so the caller can
+// render it as plain text instead of a live link.
+function httpUrl(value: string): string | null {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 function Gates({ run }: { run: Run }) {
   const byCheck = new Map(run.scores.filter((s) => s.gated).map((s) => [s.check_id, s]));
 
@@ -125,6 +137,7 @@ function Gates({ run }: { run: Run }) {
             {run.gate_outcomes.map((gate) => {
               const score = byCheck.get(gate.check_id);
               const ProvIcon = score ? PROVENANCE_ICON[score.provenance] : null;
+              const sourceHref = score?.source_url ? httpUrl(score.source_url) : null;
               return (
                 <tr key={gate.check_id} className="border-b border-rule last:border-0">
                   <td className="px-5 py-4 align-top">
@@ -183,14 +196,19 @@ function Gates({ run }: { run: Run }) {
                         {score.provenance.replace("_", " ")}
                       </span>
                     )}
-                    {score?.source_url && (
-                      <a
-                        href={score.source_url}
-                        className="mt-0.5 block text-[11px] text-ink underline"
-                      >
-                        source
-                      </a>
-                    )}
+                    {score?.source_url &&
+                      (sourceHref ? (
+                        <a
+                          href={sourceHref}
+                          className="mt-0.5 block text-[11px] text-ink underline"
+                        >
+                          source
+                        </a>
+                      ) : (
+                        <span className="mt-0.5 block break-all text-[11px] text-muted">
+                          {score.source_url}
+                        </span>
+                      ))}
                   </td>
                   <td className="px-5 py-4 text-right align-top">
                     <span

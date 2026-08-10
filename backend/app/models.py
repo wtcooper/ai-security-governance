@@ -21,7 +21,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from sqlmodel import Field, SQLModel
+from sqlmodel import Field, Index, SQLModel
 
 
 def _utcnow() -> datetime:
@@ -84,6 +84,16 @@ class PolicyVersion(SQLModel, table=True):
     """
 
     __tablename__ = "policy_version"
+
+    # Two concurrent saves both read the current newest version and both write n+1, which
+    # leaves two different documents claiming to be the same version — and a recorded run
+    # pointing at that version can no longer be resolved to one document. The database is
+    # the only place that race can be settled, so uniqueness is declared here. Expressed as
+    # a unique INDEX rather than a table constraint because SQLite can add an index to an
+    # existing table but cannot add a constraint to one.
+    __table_args__ = (
+        Index("uq_policy_version_asset_type_version", "asset_type", "version", unique=True),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     asset_type: AssetType = Field(index=True)

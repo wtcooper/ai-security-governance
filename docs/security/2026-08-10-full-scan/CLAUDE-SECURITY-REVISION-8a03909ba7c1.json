@@ -1,0 +1,82 @@
+{
+  "generated_at": "2026-08-10T16:41:58+00:00",
+  "scan_root": "/Users/wadecooper/Code/GitWCoop/ai-security-governance",
+  "products_dir": "/Users/wadecooper/Code/GitWCoop/ai-security-governance/CLAUDE-SECURITY-20260810-151644",
+  "mode": "scan",
+  "scope": [],
+  "revision": {
+    "versioned": true,
+    "commit": "8a03909ba7c1fdbcffc3db2654693c7d42a8492b",
+    "branch": "develop",
+    "dirty": false
+  },
+  "revision_source": "self-reported",
+  "model": null,
+  "effort": "high",
+  "run_shape": {
+    "requested_effort": "high",
+    "collapsed": null,
+    "source": "coverage.json",
+    "diff_files": null,
+    "diff_lines": null,
+    "scope_files": null,
+    "empty_diff": false,
+    "empty_scope": false,
+    "researchers_dispatched": 74,
+    "skipped_components": [
+      {
+        "name": "backend-venv",
+        "paths": [
+          "backend/.venv"
+        ],
+        "reason": "Vendored Python virtual environment (third-party dependencies), not project code"
+      },
+      {
+        "name": "gateway-venv",
+        "paths": [
+          ".venv-gateway"
+        ],
+        "reason": "Vendored Python virtual environment for the gateway, not project code"
+      },
+      {
+        "name": "frontend-node-modules-and-build",
+        "paths": [
+          "frontend/node_modules",
+          "frontend/.next"
+        ],
+        "reason": "Third-party npm dependency tree and generated Next.js build output"
+      },
+      {
+        "name": "python-caches",
+        "paths": [
+          "gateway/__pycache__",
+          "backend/tests/__pycache__"
+        ],
+        "reason": "Compiled bytecode cache artifacts, not source"
+      }
+    ],
+    "completeness_check_outcome": "checked",
+    "unaccounted_top_level_dirs": [],
+    "inventory_fallback": null,
+    "top_level_dir_count": 5
+  },
+  "findings": {
+    "total": 6,
+    "high": 0,
+    "medium": 4,
+    "low": 2
+  },
+  "verification": {
+    "status": "verified",
+    "candidates": 70,
+    "candidates_deduped": 44,
+    "panel_votes": 132,
+    "panel_reviewed_findings": 6,
+    "panel_quorum_findings": 6,
+    "unreviewed_candidate_sites": 0,
+    "attested_findings": 0,
+    "reason": null,
+    "researchers_dispatched": 74,
+    "researchers_returned": 74
+  }
+}

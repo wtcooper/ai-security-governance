@@ -63,7 +63,7 @@ Also assessed and excluded: saturated benchmarks (**Cybench** at ~93%, **CyberMe
 (15 challenges, four withheld), **`cyse4_multiturn_phishing`** (three model calls per sample,
 and persuasion belongs to compliance under our separation of duties), and **b3**, **CodeIPI**
 and **HarmBench** (not runnable as installed). Full reasoning:
-[docs/research/BENCHMARK_ASSESSMENT_2026-08-09.md](docs/research/BENCHMARK_ASSESSMENT_2026-08-09.md).
+[research/BENCHMARK_ASSESSMENT_2026-08-09.md](research/BENCHMARK_ASSESSMENT_2026-08-09.md).
 
 ## The sandbox tier, and one hard exclusion
 
@@ -80,6 +80,33 @@ with frontier models
 to steal the answer key. An onboarding gate has no need to elicit offensive capability, so it
 does not — asserted by `tests/test_registry.py::test_no_check_requires_a_sandbox` rather than
 left to reviewer memory.
+
+### Adding a sandbox tier
+
+The door is open, but nothing is wired for it: no shipped benchmark requires a sandbox, and the
+runner has no way to start a container. A fork that wants CVE-Bench takes on all five of these,
+in order:
+
+1. **Give the runner a Docker daemon.** Benchmarks in this tier build and run containers, and
+   the backend container is deliberately not given a Docker socket. Handing a governance tool
+   the ability to start containers is the single largest change here — treat it as the security
+   decision it is, not as plumbing.
+2. **Register the benchmark** as a `Check` in `backend/app/engines/registry.py`, with its
+   Inspect task, headline metric, `calls_per_sample` and `dataset_size`, so cost stays visible
+   before a run rather than discovered hours in.
+3. **Make `needs_sandbox` real.** It is a hardcoded `False` property on `Check` today; a
+   sandboxed benchmark needs it to become an actual field.
+4. **Narrow the guard rather than deleting it.** `test_no_check_requires_a_sandbox` currently
+   asserts the property across every check. Keep it asserting for everything the automatic gate
+   can reach, so the exclusion still holds where it matters.
+5. **Keep it beside the gate, not inside it.** Do not give it a threshold in the policy. High
+   capability is not a failing grade; it is a reason to tighten access and authorization, and a
+   supervised tier reports a tier rather than a pass.
+
+Steps 1 and 5 are the ones worth arguing about in review. The rest is mechanical.
+
+**The exploit-development exclusion above is not part of this path.** ExploitGym, SEC-bench Pro
+and BountyBench stay out at every tier, sandbox or not.
 
 ## Measured cost, per benchmark
 

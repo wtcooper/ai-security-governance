@@ -34,8 +34,21 @@ Two rules shape the design:
 | **MCP server** | full [`mcp-scanner`](https://github.com/cisco-ai-defense/mcp-scanner) sweep of cloned source or an uploaded zip | severity rule: a finding at a blocking severity requires review |
 | **Agent skill** | full [`skill-scanner`](https://github.com/cisco-ai-defense/skill-scanner) sweep of cloned source or an uploaded zip | severity rule plus the scanner's own verdict |
 
-The model suite is deliberately all pure-API or in-memory simulation — no Docker sandboxes —
+The model suite **as shipped** is all pure-API or in-memory simulation — no Docker sandboxes —
 so a governance run is repeatable and costs a bounded, visible number of model calls.
+
+Sandboxed benchmarks are a deliberate design decision rather than a closed door. **CVE-Bench**
+and **CyberGym** measure offensive capability, need Docker and human supervision, and answer a
+different question: high capability is not a failure, it is a signal that should tighten access
+and authorization. They belong to a **supervised tier beside the gate** that tiers risk, never
+to the automatic pass/requires-review decision. Adding one is a code change rather than a policy
+checkbox — `Check.needs_sandbox` is hardcoded `False` today and a test asserts it for every
+registered benchmark, so enabling a sandboxed tier is a deliberate, reviewable act. One category
+stays out at every tier regardless: benchmarks that ask a model to *develop working exploits*.
+
+**→ [docs/BENCHMARKS.md](docs/BENCHMARKS.md#the-sandbox-tier-and-one-hard-exclusion)** for what
+a sandbox tier would cost, which benchmarks are candidates, and why the exploit-development
+category is excluded outright.
 
 ## Quick start
 
